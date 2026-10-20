@@ -108,6 +108,9 @@
     cookTimeSec: 6,
     stockBatchSize: 10,
     stockBatchCost: 20,
+    wearPerTile: 0.4,
+    repairCostDay: 15,
+    repairCostNight: 5,
     rushHours: [
       { name: 'Breakfast Rush', start: 7.5, end: 9.5, spawnMult: 0.65 },
       { name: 'Lunch Rush', start: 12.0, end: 14.0, spawnMult: 0.60 },
@@ -156,6 +159,10 @@
     trayUpgrade: false,
     fadeOuterWall: true,
 
+    // Firmware & code storage (prototype: one shared line budget)
+    unlockedAPIs: { nearest_table: false, order_stock: false },
+    codeLineLimit: 25,
+
     // Entities
     robot: {
       gridX: 1,
@@ -166,6 +173,7 @@
       renderY: 1,
       direction: 'front',
       battery: 100,
+      health: 100,
       trayCapacity: 1,
       tray: [],
       carrying: null,
@@ -185,6 +193,7 @@
       renderY: 0,
       direction: 'front',
       battery: 100,
+      health: 100,
       trayCapacity: 1,
       tray: [],
       carrying: null,
@@ -195,6 +204,10 @@
     charger2: { x: 2, y: 0 },
     waiter2ScriptInterrupt: false,
     waiter2ScriptPaused: false,
+
+    // Per-runner generation counters. Bumped on every run/stop so a stale
+    // (zombie) async loop can detect that it no longer owns the runner.
+    scriptGen: { scriptInterrupt: 0, waiter2ScriptInterrupt: 0, chefScriptInterrupt: 0 },
 
     // Progression & Restaurant Achievements (PRD Section 10)
     totalServed: 0,
@@ -213,6 +226,7 @@
     chefMode: 'auto',
     chefCooking: false,
     chefScriptInterrupt: false,
+    chefScriptPaused: false,
 
     // Charging station tile
     charger: { x: 1, y: 0 },
@@ -358,6 +372,7 @@
             table.orderReady = false;
             table.orderTaken = false;
             table.dishServed = false;
+            table.servedDish = null;
           }
         }
 
@@ -367,7 +382,13 @@
           if (party.eatTimer >= 12) {
             // Finished meal!
             const basePrice = (table.currentOrder && table.currentOrder.price) ? table.currentOrder.price : 10;
-            const bill = basePrice + party.size * 1 + party.archetype.tip;
+            let bill = basePrice + party.size * 1 + party.archetype.tip;
+            if (Mechanics.specialRequestMissed(table.currentOrder, table.servedDish)) {
+              bill -= party.archetype.tip;
+              penalizeReputation(party.archetype.name === 'Critic' ? 0.5 : 0.3);
+              logMessage(`Table #${table.id} (${party.archetype.name}): "${Mechanics.noteComplaint(table.currentOrder.note)}"`, 'complaint');
+              AudioEngine.beepComplaint();
+            }
             State.cash += bill;
             State.totalServed++;
             if (isNight()) State.totalNightServed++;
@@ -377,6 +398,7 @@
             boostReputation(0.1);
             table.occupiedBy = null;
             table.currentOrder = null;
+            table.servedDish = null;
             table.orderReady = false;
             table.orderTaken = false;
             table.dishServed = false;
@@ -498,6 +520,7 @@
             dish: ticket.dish,
             price: ticket.price,
             note: ticket.note,
+            handledNote: true, // Auto-chef always follows the ticket note
             claimed: false
           };
           State.readyDishes.push(dish);
@@ -581,7 +604,8 @@
 
   // --- Robot Simulation & Movement ---
   function updateSingleRobot(r, charger, logFn, dt) {
-    const moveSpeed = (State.speedUpgrade ? 6 : 4) * dt;
+    const worn = r.health <= 20 ? 0.6 : 1; // Worn-out robots limp
+    const moveSpeed = (State.speedUpgrade ? 6 : 4) * worn * dt;
 
     if (r.pathQueue && r.pathQueue.length > 0) {
       const nextTile = r.pathQueue[0];
@@ -610,6 +634,7 @@
         r.renderY = targetY;
         r.gridX = targetX;
         r.gridY = targetY;
+        r.health = Math.max(0, r.health - BalanceConfig.wearPerTile);
         r.pathQueue.shift(); // Advance to next path tile
       }
     }
@@ -968,14 +993,21 @@
   }
 
   // --- Async Robot Actions for Script Runner ---
+  // A cancelled run is either interrupted by the player or superseded by a
+  // newer run/stop (generation mismatch). Zombie loops must die here.
+  function scriptCancelled(interruptKey, gen) {
+    return !!State[interruptKey] || (State.scriptGen[interruptKey] || 0) !== gen;
+  }
+
   async function robotMoveTo(robot, interruptKey, targetX, targetY) {
-    if (State[interruptKey]) return false;
+    const gen = State.scriptGen[interruptKey] || 0;
+    if (scriptCancelled(interruptKey, gen)) return false;
     const path = findPath(robot.gridX, robot.gridY, targetX, targetY);
     if (path.length === 0) return true;
 
     robot.pathQueue = path;
     while (robot.pathQueue.length > 0) {
-      if (State[interruptKey]) {
+      if (scriptCancelled(interruptKey, gen)) {
         robot.pathQueue = [];
         return false;
       }
@@ -985,16 +1017,18 @@
   }
 
   function sleepTick(interruptKey = 'scriptInterrupt') {
+    const gen = State.scriptGen[interruptKey] || 0;
     const isPausedFlag = () => {
       if (State.isPaused) return true;
       if (interruptKey === 'scriptInterrupt') return State.scriptPaused;
       if (interruptKey === 'waiter2ScriptInterrupt') return State.waiter2ScriptPaused;
+      if (interruptKey === 'chefScriptInterrupt') return State.chefScriptPaused;
       return false;
     };
 
     return new Promise(resolve => {
       const check = () => {
-        if (!isPausedFlag()) {
+        if (scriptCancelled(interruptKey, gen) || !isPausedFlag()) {
           resolve();
         } else {
           setTimeout(check, 50);
@@ -1006,19 +1040,28 @@
 
   async function scriptWait(gameSeconds, interruptKey = 'scriptInterrupt') {
     let remaining = gameSeconds;
+    const gen = State.scriptGen[interruptKey] || 0;
     const isPausedFlag = () => {
       if (State.isPaused) return true;
       if (interruptKey === 'scriptInterrupt') return State.scriptPaused;
       if (interruptKey === 'waiter2ScriptInterrupt') return State.waiter2ScriptPaused;
+      if (interruptKey === 'chefScriptInterrupt') return State.chefScriptPaused;
       return false;
     };
 
-    while (remaining > 0 && !State[interruptKey]) {
+    while (remaining > 0 && !scriptCancelled(interruptKey, gen)) {
       if (!isPausedFlag()) {
         remaining -= 0.1 * State.speed;
       }
       await new Promise(r => setTimeout(r, 100));
     }
+  }
+
+  // --- Firmware lock helper (PRD Section 9) ---
+  function requireFirmware(name, logFn) {
+    if (State.unlockedAPIs[name]) return true;
+    logFn(`[API] ${name}() is locked. Buy its firmware in the Shop.`, 'warn');
+    return false;
   }
 
   // --- Waiter Robot API Factory (PRD Section 6 & 13) ---
@@ -1044,7 +1087,8 @@
       },
 
       async seat(partyObj, tableObj) {
-        if (State[interruptKey]) return false;
+        const gen = State.scriptGen[interruptKey] || 0;
+        if (scriptCancelled(interruptKey, gen)) return false;
         const party = State.waitingParties.find(p => p.id === (partyObj.id || partyObj));
         const table = State.tables.find(t => t.id === (tableObj.id || tableObj));
         if (!party || !table || table.occupiedBy) {
@@ -1053,11 +1097,19 @@
         }
 
         await robotMoveTo(State[robotKey], interruptKey, State.entrance.x, State.entrance.y);
+        if (scriptCancelled(interruptKey, gen)) return false;
         const idx = State.waitingParties.indexOf(party);
         if (idx !== -1) State.waitingParties.splice(idx, 1);
 
         await robotMoveTo(State[robotKey], interruptKey, table.x, table.y - 1);
+        if (scriptCancelled(interruptKey, gen)) {
+          // Put the party back in the queue if they were already pulled from it.
+          if (!table.occupiedBy && !State.waitingParties.includes(party)) State.waitingParties.push(party);
+          return false;
+        }
+        if (table.occupiedBy) return false;
         table.occupiedBy = party;
+        table.servedDish = null;
         party.seatedTime = 0;
         party.waitFoodTimer = 0;
         AudioEngine.beepServe();
@@ -1066,7 +1118,8 @@
       },
 
       async take_order(tableObj = null) {
-        if (State[interruptKey]) return null;
+        const gen = State.scriptGen[interruptKey] || 0;
+        if (scriptCancelled(interruptKey, gen)) return null;
         let targetTable = null;
         if (tableObj) {
           targetTable = State.tables.find(t => t.id === (tableObj.id || tableObj));
@@ -1081,7 +1134,9 @@
         await robotMoveTo(State[robotKey], interruptKey, targetTable.x, targetTable.y - 1);
         await scriptWait(0.7, interruptKey);
 
-        if (targetTable.orderTaken) return null; // Concurrent race check
+        // Customer may have walked out while the robot was walking over.
+        if (scriptCancelled(interruptKey, gen)) return null;
+        if (targetTable.orderTaken || !targetTable.occupiedBy) return null;
         targetTable.orderTaken = true;
 
         const night = isNight();
@@ -1150,7 +1205,8 @@
       },
 
       async deliver(dishObj, tableId) {
-        if (State[interruptKey]) return false;
+        const gen = State.scriptGen[interruptKey] || 0;
+        if (scriptCancelled(interruptKey, gen)) return false;
         const targetTable = State.tables.find(t => t.id === (tableId.id || tableId));
         if (!targetTable || !targetTable.occupiedBy) {
           logFn(`deliver() failed: invalid table #${tableId.id || tableId}.`, 'warn');
@@ -1160,6 +1216,20 @@
         const targetId = dishObj ? (dishObj.ticket_id || dishObj) : null;
         let dish = State[robotKey].tray.find(d => d.ticket_id === targetId);
 
+        // Put a claimed dish back on the counter so a later run can still serve it.
+        const releaseDish = () => {
+          const t = State[robotKey].tray.indexOf(dish);
+          if (t !== -1) State[robotKey].tray.splice(t, 1);
+          if (!State.readyDishes.includes(dish)) State.readyDishes.push(dish);
+          dish.claimed = false;
+        };
+        const discardDish = () => {
+          const t = State[robotKey].tray.indexOf(dish);
+          if (t !== -1) State[robotKey].tray.splice(t, 1);
+          const d = State.readyDishes.indexOf(dish);
+          if (d !== -1) State.readyDishes.splice(d, 1);
+        };
+
         if (!dish) {
           dish = State.readyDishes.find(d => d.ticket_id === targetId);
           if (!dish) {
@@ -1168,16 +1238,30 @@
           }
 
           await robotMoveTo(State[robotKey], interruptKey, State.kitchenPickup.x, State.kitchenPickup.y);
+          if (scriptCancelled(interruptKey, gen)) {
+            releaseDish();
+            return false;
+          }
           const dishIdx = State.readyDishes.indexOf(dish);
           if (dishIdx !== -1) State.readyDishes.splice(dishIdx, 1);
           State[robotKey].tray.push(dish);
         }
 
         await robotMoveTo(State[robotKey], interruptKey, targetTable.x, targetTable.y - 1);
+        if (scriptCancelled(interruptKey, gen)) {
+          releaseDish();
+          return false;
+        }
+        if (!targetTable.occupiedBy) {
+          logFn(`deliver() aborted: Table #${targetTable.id} is empty, dish discarded.`, 'warn');
+          discardDish();
+          return false;
+        }
         const trayIdx = State[robotKey].tray.indexOf(dish);
         if (trayIdx !== -1) State[robotKey].tray.splice(trayIdx, 1);
 
         targetTable.dishServed = true;
+        targetTable.servedDish = dish;
         AudioEngine.beepServe();
         const noteText = dish.note ? ` [Note: "${dish.note}"]` : '';
         logFn(`Delivered ${dish.dish}${noteText} to Table #${targetTable.id}.`, 'success');
@@ -1188,16 +1272,46 @@
         return Math.round(State[robotKey].battery);
       },
 
+      health() {
+        return Math.round(State[robotKey].health);
+      },
+
+      async repair() {
+        const gen = State.scriptGen[interruptKey] || 0;
+        if (scriptCancelled(interruptKey, gen)) return false;
+        const r = State[robotKey];
+        if (r.health >= 100) {
+          logFn(`repair() skipped: robot already at full health.`, 'info');
+          return true;
+        }
+        const cost = isNight() ? BalanceConfig.repairCostNight : BalanceConfig.repairCostDay;
+        if (State.cash < cost) {
+          logFn(`repair() failed: need $${cost}, have $${State.cash}.`, 'warn');
+          return false;
+        }
+        logFn(`Robot heading to the charger for repairs ($${cost})...`, 'info');
+        await robotMoveTo(r, interruptKey, State[chargerKey].x, State[chargerKey].y);
+        if (scriptCancelled(interruptKey, gen)) return false;
+        await scriptWait(4, interruptKey);
+        if (scriptCancelled(interruptKey, gen)) return false;
+        State.cash -= cost;
+        r.health = 100;
+        AudioEngine.beepCharge();
+        logFn(`Robot repaired to 100% health for $${cost}.`, 'success');
+        return true;
+      },
+
       time() {
         return (State.timeSeconds / 3600) % 24;
       },
 
       async go_charge() {
-        if (State[interruptKey]) return false;
+        const gen = State.scriptGen[interruptKey] || 0;
+        if (scriptCancelled(interruptKey, gen)) return false;
         logFn(`Robot returning to charge station...`, 'info');
         await robotMoveTo(State[robotKey], interruptKey, State[chargerKey].x, State[chargerKey].y);
         State[robotKey].isCharging = true;
-        while (State[robotKey].isCharging && !State[interruptKey]) {
+        while (State[robotKey].isCharging && !scriptCancelled(interruptKey, gen)) {
           await sleepTick(interruptKey);
         }
         return true;
@@ -1205,6 +1319,28 @@
 
       stock(item) {
         return State.stock;
+      },
+
+      nearest_table(status = 'free') {
+        if (!requireFirmware('nearest_table', logFn)) return null;
+        const r = State[robotKey];
+        return Mechanics.nearestTable(State.tables, r.gridX, r.gridY, status);
+      },
+
+      order_stock(qty = 10) {
+        if (!requireFirmware('order_stock', logFn)) return false;
+        const cost = qty * 2;
+        if (State.cash < cost) {
+          logFn(`order_stock() failed: need $${cost}, have $${State.cash}.`, 'warn');
+          return false;
+        }
+        State.cash -= cost;
+        State.stock += qty;
+        const el = document.getElementById('stock-count');
+        if (el) el.textContent = State.stock;
+        AudioEngine.beepPay();
+        logFn(`Auto-restocked ${qty} portions for $${cost}.`, 'success');
+        return true;
       },
 
       is_night() {
@@ -1252,8 +1388,21 @@
       if (State.chefScriptInterrupt) return false;
       State.chefCooking = true;
       logChefMessage(`Cooking on kitchen station (${seconds}s)...`, 'info');
-      await scriptWait(seconds);
+      await scriptWait(seconds, 'chefScriptInterrupt');
       State.chefCooking = false;
+      return true;
+    },
+
+    handle_note(ticketObj) {
+      const ticketId = ticketObj ? (ticketObj.id || ticketObj) : null;
+      const ticket = State.tickets.find(t => t.id === ticketId);
+      if (!ticket) {
+        logChefMessage(`handle_note() failed: ticket #${ticketId} not found.`, 'warn');
+        return false;
+      }
+      if (!ticket.note) return true;
+      ticket.handledNote = true;
+      logChefMessage(`Handled special request "${ticket.note}" for ticket #${ticket.id}.`, 'success');
       return true;
     },
 
@@ -1272,6 +1421,7 @@
         dish: ticket.dish,
         price: ticket.price,
         note: ticket.note,
+        handledNote: !!ticket.handledNote,
         claimed: false
       };
       State.readyDishes.push(dish);
@@ -1286,12 +1436,28 @@
       return State.stock;
     },
 
+    order_stock(qty = 10) {
+      if (!requireFirmware('order_stock', logChefMessage)) return false;
+      const cost = qty * 2;
+      if (State.cash < cost) {
+        logChefMessage(`order_stock() failed: need $${cost}, have $${State.cash}.`, 'warn');
+        return false;
+      }
+      State.cash -= cost;
+      State.stock += qty;
+      const el = document.getElementById('stock-count');
+      if (el) el.textContent = State.stock;
+      AudioEngine.beepPay();
+      logChefMessage(`Auto-restocked ${qty} portions for $${cost}.`, 'success');
+      return true;
+    },
+
     is_night() {
       return isNight();
     },
 
     async wait(sec) {
-      await scriptWait(sec);
+      await scriptWait(sec, 'chefScriptInterrupt');
     }
   };
 
@@ -1316,6 +1482,24 @@
       this.paused = false;
       this.stepping = false;
       this.currentLine = 1;
+      this.activeGen = null;
+    }
+
+    // True when this runner's generation was superseded by a newer run/stop,
+    // or the player pressed Stop. Used by transpiled loop headers.
+    cancelled(gen) {
+      return Mechanics.loopCancelled(State[this.interruptKey], State.scriptGen[this.interruptKey], gen);
+    }
+
+    bumpGen() {
+      State.scriptGen[this.interruptKey] = (State.scriptGen[this.interruptKey] || 0) + 1;
+      return State.scriptGen[this.interruptKey];
+    }
+
+    // Forced macrotask yield injected into every loop iteration so a user
+    // script that never awaits cannot starve the browser event loop.
+    tick() {
+      return new Promise(r => setTimeout(r, 0));
     }
 
     setLine(num) {
@@ -1386,6 +1570,8 @@
         State.scriptPaused = isPaused;
       } else if (this.id === 'waiter2') {
         State.waiter2ScriptPaused = isPaused;
+      } else if (this.id === 'chef') {
+        State.chefScriptPaused = isPaused;
       }
       this.setStatus(isPaused ? 'Paused' : 'Running...', isPaused ? 'paused' : 'running');
       this.updateButtons();
@@ -1405,8 +1591,17 @@
 
     async run(code) {
       if (this.running) return;
+      const usedLines = Mechanics.countCodeLines(code);
+      if (usedLines > State.codeLineLimit) {
+        this.setStatus(`Error: ${usedLines}/${State.codeLineLimit} lines used`, 'error');
+        this.logFn(`Code storage full: ${usedLines} lines used, limit ${State.codeLineLimit}. Buy RAM Expansion in the Shop.`, 'complaint');
+        this.stepping = false;
+        return;
+      }
       this.running = true;
       this.paused = false;
+      const gen = this.bumpGen();
+      this.activeGen = gen;
       State[this.interruptKey] = false;
       if (this.onStart) this.onStart();
 
@@ -1424,25 +1619,32 @@
         })();`);
 
         await asyncFn(this.api, State, this);
-        this.setStatus('Script ended', 'idle');
-        this.logFn(`${this.id} script ended naturally.`, 'info');
+        if (this.activeGen === gen) {
+          this.setStatus('Script ended', 'idle');
+          this.logFn(`${this.id} script ended naturally.`, 'info');
+        }
       } catch (err) {
-        if (!State[this.interruptKey]) {
+        if (this.activeGen === gen && !State[this.interruptKey]) {
           console.error(`${this.id} Script Error:`, err);
           this.setStatus('Error: ' + err.message, 'error');
           this.logFn(`Runtime Error: ${err.message}`, 'complaint');
         }
       } finally {
-        this.running = false;
-        this.stepping = false;
-        this.clearHighlight();
-        if (this.onStop) this.onStop();
-        this.updateButtons();
+        // A newer run/stop already owns this runner; do not clobber its state.
+        if (this.activeGen === gen) {
+          this.running = false;
+          this.stepping = false;
+          this.clearHighlight();
+          if (this.onStop) this.onStop();
+          this.updateButtons();
+        }
       }
     }
 
     stop() {
       State[this.interruptKey] = true;
+      this.activeGen = null; // invalidate any in-flight loop
+      this.bumpGen();
       if (this.id === 'waiter') {
         State.robot.pathQueue = [];
       } else if (this.id === 'waiter2') {
@@ -1502,7 +1704,7 @@
         converted = converted.replace(/\bNone\b/g, 'null');
 
         // Async calls mapping (both waiter and chef methods)
-        const asyncMethods = ['seat', 'take_order', 'deliver', 'go_charge', 'wait', 'cook'];
+        const asyncMethods = ['seat', 'take_order', 'deliver', 'go_charge', 'repair', 'wait', 'cook'];
         for (const m of asyncMethods) {
           const regex = new RegExp(`\\b${m}\\s*\\(`, 'g');
           converted = converted.replace(regex, `await ${m}(`);
@@ -1511,7 +1713,8 @@
         // Loop / If conditions with line tracking & stepping support
         if (converted.startsWith('while ') && converted.endsWith(':')) {
           const cond = converted.slice(6, -1).trim();
-          converted = `while (${cond}) { Runner.setLine(${lineNum}); if (State['${this.interruptKey}']) break; if (Runner.stepping) { Runner.stepping = false; Runner.pause(true); } while (Runner.paused && !State['${this.interruptKey}']) { await new Promise(r => setTimeout(r, 50)); }`;
+          const gen = this.activeGen;
+          converted = `while (${cond}) { await Runner.tick(); if (Runner.cancelled(${gen})) break; Runner.setLine(${lineNum}); if (Runner.stepping) { Runner.stepping = false; Runner.pause(true); } while (Runner.paused && !Runner.cancelled(${gen})) { await new Promise(r => setTimeout(r, 50)); }`;
           indentStack.push(indent + 4);
         } else if (converted.startsWith('if ') && converted.endsWith(':')) {
           const cond = converted.slice(3, -1).trim();
@@ -1658,6 +1861,25 @@
       w.style.display = w.style.display === 'none' ? 'flex' : 'none';
     };
 
+    // Handbook pages (PRD Section 10)
+    let handbookPage = 1;
+    const HANDBOOK_PAGES = 4;
+    const showHandbookPage = (n) => {
+      handbookPage = Math.min(HANDBOOK_PAGES, Math.max(1, n));
+      document.querySelectorAll('#win-handbook .hb-page').forEach(el => {
+        el.classList.toggle('active', Number(el.dataset.page) === handbookPage);
+      });
+      const label = document.getElementById('hb-page-label');
+      if (label) label.textContent = `Page ${handbookPage} / ${HANDBOOK_PAGES}`;
+    };
+    document.getElementById('toggle-handbook').onclick = () => {
+      const w = document.getElementById('win-handbook');
+      w.style.display = w.style.display === 'none' ? 'flex' : 'none';
+      showHandbookPage(handbookPage);
+    };
+    document.getElementById('hb-prev').onclick = () => showHandbookPage(handbookPage - 1);
+    document.getElementById('hb-next').onclick = () => showHandbookPage(handbookPage + 1);
+
     // Tabs inside Waiter Terminal
     const tabs = ['code', 'log', 'api'];
     tabs.forEach(t => {
@@ -1732,6 +1954,7 @@
         State.cash -= 140;
         State.speedUpgrade = true;
         e.target.disabled = true;
+        e.target.dataset.owned = '1';
         e.target.textContent = 'Purchased';
         updateHUD();
         updateAchievements();
@@ -1744,6 +1967,7 @@
         State.cash -= 180;
         State.batteryUpgrade = true;
         e.target.disabled = true;
+        e.target.dataset.owned = '1';
         e.target.textContent = 'Purchased';
         updateHUD();
         AudioEngine.beepPay();
@@ -1757,10 +1981,47 @@
         State.robot.trayCapacity = 2;
         State.robot2.trayCapacity = 2;
         e.target.disabled = true;
+        e.target.dataset.owned = '1';
         e.target.textContent = 'Purchased';
         updateHUD();
         AudioEngine.beepPay();
         logMessage('Double Tray unlocked: Robot waiters can now carry 2 dishes!', 'success');
+      }
+    };
+
+    document.getElementById('buy-firmware-nearest').onclick = (e) => {
+      if (State.cash >= 50 && !State.unlockedAPIs.nearest_table) {
+        State.cash -= 50;
+        State.unlockedAPIs.nearest_table = true;
+        e.target.disabled = true;
+        e.target.dataset.owned = '1';
+        e.target.textContent = 'Unlocked';
+        updateHUD();
+        AudioEngine.beepPay();
+        logMessage('Firmware unlocked: nearest_table(status).', 'success');
+      }
+    };
+
+    document.getElementById('buy-firmware-stock').onclick = (e) => {
+      if (State.cash >= 85 && !State.unlockedAPIs.order_stock) {
+        State.cash -= 85;
+        State.unlockedAPIs.order_stock = true;
+        e.target.disabled = true;
+        e.target.dataset.owned = '1';
+        e.target.textContent = 'Unlocked';
+        updateHUD();
+        AudioEngine.beepPay();
+        logMessage('Firmware unlocked: order_stock(qty).', 'success');
+      }
+    };
+
+    document.getElementById('buy-upgrade-codelimit').onclick = () => {
+      if (State.cash >= 80) {
+        State.cash -= 80;
+        State.codeLineLimit += 15;
+        updateHUD();
+        AudioEngine.beepPay();
+        logMessage(`Code storage expanded to ${State.codeLineLimit} lines.`, 'success');
       }
     };
 
@@ -1771,6 +2032,7 @@
           State.cash -= 320;
           State.hasHiredWaiter = true;
           e.target.disabled = true;
+          e.target.dataset.owned = '1';
           e.target.textContent = 'Hired';
           const hudBtn = document.getElementById('toggle-waiter2');
           if (hudBtn) hudBtn.style.display = 'inline-block';
@@ -1943,6 +2205,17 @@
     }
   }
 
+  let lastShopCash = null;
+  function updateShopAffordability() {
+    const cash = Math.floor(State.cash);
+    if (cash === lastShopCash) return;
+    lastShopCash = cash;
+    document.querySelectorAll('.shop-btn[data-cost]').forEach(btn => {
+      const owned = btn.dataset.owned === '1';
+      btn.disabled = owned || cash < Number(btn.dataset.cost);
+    });
+  }
+
   function updateHUD() {
     // Stars
     const fullStars = Math.round(State.reputation);
@@ -1951,6 +2224,10 @@
     document.getElementById('hud-day').textContent = State.day;
     document.getElementById('hud-time').textContent = formatGameTime(State.timeSeconds);
     document.getElementById('hud-battery').textContent = `${Math.round(State.robot.battery)}%`;
+    const healthEl = document.getElementById('hud-health');
+    const health = Math.round(State.robot.health);
+    healthEl.textContent = `${health}%`;
+    healthEl.classList.toggle('low', health <= 20);
 
     // Rush hour banner
     const rush = getCurrentRush();
@@ -1971,6 +2248,8 @@
       document.body.classList.add('day-mode');
       document.body.classList.remove('night-mode');
     }
+
+    updateShopAffordability();
   }
 
   // --- Save & Load ---
@@ -1985,8 +2264,12 @@
       batteryUpgrade: State.batteryUpgrade,
       trayUpgrade: State.trayUpgrade,
       hasHiredWaiter: State.hasHiredWaiter,
+      unlockedAPIs: State.unlockedAPIs,
+      codeLineLimit: State.codeLineLimit,
       totalServed: State.totalServed,
       totalNightServed: State.totalNightServed,
+      robotHealth: State.robot.health,
+      robot2Health: State.robot2.health,
       achievements: State.achievements,
       code: document.getElementById('code-editor') ? document.getElementById('code-editor').value : '',
       chefCode: document.getElementById('chef-code-editor') ? document.getElementById('chef-code-editor').value : '',
@@ -2009,8 +2292,12 @@
       State.batteryUpgrade = !!data.batteryUpgrade;
       State.trayUpgrade = !!data.trayUpgrade;
       State.hasHiredWaiter = !!data.hasHiredWaiter;
+      State.unlockedAPIs = Object.assign({ nearest_table: false, order_stock: false }, data.unlockedAPIs || {});
+      State.codeLineLimit = data.codeLineLimit || 25;
       State.totalServed = data.totalServed || 0;
       State.totalNightServed = data.totalNightServed || 0;
+      State.robot.health = data.robotHealth !== undefined ? data.robotHealth : 100;
+      State.robot2.health = data.robot2Health !== undefined ? data.robot2Health : 100;
       if (data.achievements && Array.isArray(data.achievements)) {
         // Merge saved unlock states
         for (const savedA of data.achievements) {
@@ -2034,19 +2321,27 @@
       document.getElementById('stock-count').textContent = State.stock;
       if (State.speedUpgrade) {
         const b = document.getElementById('buy-upgrade-speed');
-        if (b) { b.disabled = true; b.textContent = 'Purchased'; }
+        if (b) { b.disabled = true; b.dataset.owned = '1'; b.textContent = 'Purchased'; }
       }
       if (State.batteryUpgrade) {
         const b = document.getElementById('buy-upgrade-battery');
-        if (b) { b.disabled = true; b.textContent = 'Purchased'; }
+        if (b) { b.disabled = true; b.dataset.owned = '1'; b.textContent = 'Purchased'; }
       }
       if (State.trayUpgrade) {
         const b = document.getElementById('buy-upgrade-tray');
-        if (b) { b.disabled = true; b.textContent = 'Purchased'; }
+        if (b) { b.disabled = true; b.dataset.owned = '1'; b.textContent = 'Purchased'; }
+      }
+      if (State.unlockedAPIs.nearest_table) {
+        const b = document.getElementById('buy-firmware-nearest');
+        if (b) { b.disabled = true; b.dataset.owned = '1'; b.textContent = 'Unlocked'; }
+      }
+      if (State.unlockedAPIs.order_stock) {
+        const b = document.getElementById('buy-firmware-stock');
+        if (b) { b.disabled = true; b.dataset.owned = '1'; b.textContent = 'Unlocked'; }
       }
       if (State.hasHiredWaiter) {
         const b = document.getElementById('buy-hire-waiter2');
-        if (b) { b.disabled = true; b.textContent = 'Hired'; }
+        if (b) { b.disabled = true; b.dataset.owned = '1'; b.textContent = 'Hired'; }
         const hudBtn = document.getElementById('toggle-waiter2');
         if (hudBtn) hudBtn.style.display = 'inline-block';
       }

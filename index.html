@@ -28,6 +28,7 @@
       <div class="hud-item clock"><span class="label">TIME:</span> <span id="hud-time">08:00</span></div>
       <div id="hud-rush" class="hud-item rush hidden"><span id="rush-badge" class="rush-badge">🔥 RUSH</span></div>
       <div class="hud-item battery"><span class="label">BAT:</span> <span id="hud-battery">100%</span></div>
+      <div class="hud-item durability"><span class="label">DUR:</span> <span id="hud-health">100%</span></div>
       <div class="hud-item cam-hint"><span class="label">CAM:</span> Drag to pan / Scroll to zoom</div>
       <div class="hud-controls">
         <button id="speed-pause" class="ctrl-btn" title="Pause simulation">⏸</button>
@@ -38,6 +39,7 @@
       <div class="hud-actions">
         <button id="toggle-shop" class="hud-btn">📦 Shop</button>
         <button id="toggle-achievements" class="hud-btn">🏆 Achievements</button>
+        <button id="toggle-handbook" class="hud-btn">📖 Handbook</button>
         <button id="toggle-waiter" class="hud-btn active">🤖 Waiter</button>
         <button id="toggle-waiter2" class="hud-btn" style="display: none;">🤖 Waiter #2</button>
         <button id="toggle-chef" class="hud-btn active">👨‍🍳 Chef</button>
@@ -68,7 +70,7 @@
           <div class="term-tabs">
             <button id="tab-code-btn" class="tab-btn active">Code</button>
             <button id="tab-log-btn" class="tab-btn">Complaints & Log</button>
-            <button id="tab-api-btn" class="tab-btn">Handbook / API</button>
+            <button id="tab-api-btn" class="tab-btn">API</button>
           </div>
         </div>
 
@@ -85,6 +87,10 @@
 while True:
     if battery() < 20:
         go_charge()
+
+    # Wear builds up while walking; service at the charger
+    if health() < 20:
+        repair()
 
     dishes = ready_dishes()
     if len(dishes) > 0:
@@ -125,7 +131,7 @@ while True:
 
           <div class="hb-card">
             <strong>2. Orders & Kitchen</strong>
-            <p>Seated guests take 3s to decide. <code>take_order(table)</code> retrieves their order (including special notes like <i>"no onions"</i>). Send it to the chef with:</p>
+            <p>Seated guests take 3s to decide. <code>take_order(table)</code> retrieves their order (including special notes like <i>"no onions"</i>). The chef must call <code>handle_note(ticket)</code> before plating. Send it to the chef with:</p>
             <code>send_to_kitchen(order)</code>
           </div>
 
@@ -136,7 +142,12 @@ while True:
 
           <div class="hb-card">
             <strong>4. Robot Upkeep</strong>
-            <p>Check <code>battery()</code>. When low, call <code>go_charge()</code>. Check <code>is_night()</code> to handle midnight menus & night owls!</p>
+            <p>Check <code>battery()</code>. When low, call <code>go_charge()</code>. Check <code>is_night()</code> to handle midnight menus & night owls! Use <code>health()</code> and <code>repair()</code> for wear.</p>
+          </div>
+
+          <div class="hb-card">
+            <strong>5. Firmware (Shop Unlocks)</strong>
+            <p><code>nearest_table(status)</code> returns the closest table. <code>order_stock(qty)</code> buys stock for $2 per portion. Locked calls log a warning and return <code>None</code> / <code>False</code>.</p>
           </div>
         </div>
       </div>
@@ -185,6 +196,9 @@ while True:
             print("Out of stock! Pausing for restock.")
             wait(2)
             continue
+
+        # Apply any special request (e.g. "no onions")
+        handle_note(ticket)
 
         # Cooking time based on ticket
         cook(4)
@@ -263,6 +277,10 @@ while True:
     if battery() < 20:
         go_charge()
 
+    # Wear builds up while walking; service at the charger
+    if health() < 20:
+        repair()
+
     # Claim & deliver ready dishes
     dishes = ready_dishes()
     if len(dishes) > 0:
@@ -323,7 +341,7 @@ while True:
         <h3>Ingredients Restock</h3>
         <div class="shop-item">
           <span>Ingredients Restock (+10)</span>
-          <button id="buy-ingredients" class="shop-btn">Buy ($20)</button>
+          <button id="buy-ingredients" class="shop-btn" data-cost="20">Buy ($20)</button>
         </div>
         <div class="stock-status">Available Stock: <span id="stock-count">30</span> portions</div>
 
@@ -334,28 +352,51 @@ while True:
             <strong>Fast Servos</strong><br>
             <small>Robot moves 50% faster</small>
           </div>
-          <button id="buy-upgrade-speed" class="shop-btn">Buy ($140)</button>
+          <button id="buy-upgrade-speed" class="shop-btn" data-cost="140">Buy ($140)</button>
         </div>
         <div class="shop-item">
           <div>
             <strong>High-Capacity Battery</strong><br>
             <small>Battery drains at 50% speed</small>
           </div>
-          <button id="buy-upgrade-battery" class="shop-btn">Buy ($180)</button>
+          <button id="buy-upgrade-battery" class="shop-btn" data-cost="180">Buy ($180)</button>
         </div>
         <div class="shop-item">
           <div>
             <strong>Double Tray Module</strong><br>
             <small>Carry up to 2 dishes at once</small>
           </div>
-          <button id="buy-upgrade-tray" class="shop-btn">Buy ($240)</button>
+          <button id="buy-upgrade-tray" class="shop-btn" data-cost="240">Buy ($240)</button>
         </div>
         <div class="shop-item">
           <div>
             <strong>Hire Waiter Robot #2</strong><br>
             <small>Deploy second autonomous waiter</small>
           </div>
-          <button id="buy-hire-waiter2" class="shop-btn">Hire ($320)</button>
+          <button id="buy-hire-waiter2" class="shop-btn" data-cost="320">Hire ($320)</button>
+        </div>
+
+        <h3>Firmware Unlocks</h3>
+        <div class="shop-item">
+          <div>
+            <strong>nearest_table()</strong><br>
+            <small>Find closest free/order/served table</small>
+          </div>
+          <button id="buy-firmware-nearest" class="shop-btn" data-cost="50">Unlock ($50)</button>
+        </div>
+        <div class="shop-item">
+          <div>
+            <strong>order_stock()</strong><br>
+            <small>Buy stock from code ($2/portion)</small>
+          </div>
+          <button id="buy-firmware-stock" class="shop-btn" data-cost="85">Unlock ($85)</button>
+        </div>
+        <div class="shop-item">
+          <div>
+            <strong>RAM Expansion</strong><br>
+            <small>+15 code lines per terminal</small>
+          </div>
+          <button id="buy-upgrade-codelimit" class="shop-btn" data-cost="80">Buy ($80)</button>
         </div>
 
         <hr>
@@ -364,6 +405,80 @@ while True:
           <input type="checkbox" id="toggle-outer-wall-alpha" checked>
           Fade outer wall when robot is behind
         </label>
+      </div>
+    </div>
+
+    <!-- Draggable Window: Handbook (PRD Section 10) -->
+    <div id="win-handbook" class="win-panel" style="top: 90px; left: 380px; width: 400px; height: 460px; display: none;">
+      <div class="win-titlebar">
+        <span class="win-title">📖 Tray &amp; Error Handbook</span>
+        <div class="win-btns">
+          <button class="win-btn win-min" title="Minimize">_</button>
+          <button class="win-btn win-close" title="Hide">×</button>
+        </div>
+      </div>
+      <div class="win-body handbook-body">
+        <div class="hb-page active" data-page="1">
+          <h4>1. Terminal Basics</h4>
+          <div class="hb-card">
+            <strong>Loops &amp; Waiting</strong>
+            <p>Scripts repeat with <code>while True:</code>. Indent the body by 4 spaces. Add <code>wait(1)</code> so the loop does not spin. A runaway loop is stopped by the watchdog.</p>
+            <code>while True:<br>&nbsp;&nbsp;&nbsp;&nbsp;wait(1)</code>
+          </div>
+          <div class="hb-card">
+            <strong>Errors &amp; Storage</strong>
+            <p>Errors appear in the terminal with a line number. Each terminal has a line budget; blanks and <code># comments</code> are free. Buy RAM Expansion in the Shop for +15 lines.</p>
+          </div>
+        </div>
+
+        <div class="hb-page" data-page="2">
+          <h4>2. Waiter Robot</h4>
+          <div class="hb-card">
+            <strong>Seating</strong>
+            <p><code>waiting_parties()</code> lists guests at the door. <code>free_tables()</code> lists empty tables. Match party size to seats, then:</p>
+            <code>seat(party, table)</code>
+          </div>
+          <div class="hb-card">
+            <strong>Orders &amp; Delivery</strong>
+            <p><code>take_order(table)</code> after 3s. Send it with <code>send_to_kitchen(order)</code>. Take plated dishes from <code>ready_dishes()</code>, lock one with <code>claim(dish)</code>, then <code>deliver(dish, table)</code>.</p>
+          </div>
+          <div class="hb-card">
+            <strong>Upkeep</strong>
+            <p>Watch <code>battery()</code> and call <code>go_charge()</code> before it hits zero. Moving wears the robot down; check <code>health()</code> and call <code>repair()</code> at the charger ($15 day / $5 night) when it drops below 20%, or movement slows by 40%.</p>
+            <code>if health() &lt; 20:<br>&nbsp;&nbsp;&nbsp;&nbsp;repair()</code>
+          </div>
+        </div>
+
+        <div class="hb-page" data-page="3">
+          <h4>3. Chef &amp; Special Requests</h4>
+          <div class="hb-card">
+            <strong>Cooking</strong>
+            <p>Read tickets with <code>tickets()</code>, take ingredients with <code>grab("ingredients", 1)</code>, cook, then <code>plate(ticket)</code>.</p>
+          </div>
+          <div class="hb-card">
+            <strong>Notes Are Mandatory</strong>
+            <p>A ticket may carry a note such as <code>"no onions"</code>. Call <code>handle_note(ticket)</code> before plating. If you ignore it, the customer complains and the tip is lost.</p>
+            <code>handle_note(ticket)<br>cook(4)<br>plate(ticket)</code>
+          </div>
+        </div>
+
+        <div class="hb-page" data-page="4">
+          <h4>4. Firmware &amp; Fleet</h4>
+          <div class="hb-card">
+            <strong>Firmware Commands</strong>
+            <p><code>nearest_table(status)</code> finds the closest <code>"free"</code>, <code>"order"</code> or <code>"served"</code> table. <code>order_stock(qty)</code> buys stock for $2 per portion. Both are locked until bought in the Shop.</p>
+          </div>
+          <div class="hb-card">
+            <strong>Two Waiters</strong>
+            <p>Both waiters share the counter. <code>claim(dish)</code> returns <code>True</code> for exactly one robot, so two scripts never grab the same plate.</p>
+          </div>
+        </div>
+
+        <div class="hb-nav">
+          <button id="hb-prev" class="shop-btn">◀ Prev</button>
+          <span id="hb-page-label">Page 1 / 4</span>
+          <button id="hb-next" class="shop-btn">Next ▶</button>
+        </div>
       </div>
     </div>
 
@@ -384,6 +499,7 @@ while True:
     </div>
   </div>
 
+  <script src="src/mechanics.js"></script>
   <script src="src/game.js"></script>
 </body>
 </html>

@@ -49,7 +49,8 @@ This document tracks all implemented features, active work, and planned mechanic
 
 ### 1.6 Python-to-JS Transpiler & Script Runner
 - **Async sandboxed transpiler** converting Python syntax (`while True:`, `if/elif/else`, `for`, function calls, variable assignment) to async JS functions.
-- **Loop execution watchdog** to prevent infinite loops from freezing the game.
+- **Loop execution watchdog:** every transpiled loop iteration awaits a macrotask and checks a per-runner generation token, so runaway loops cannot freeze the browser.
+- **Zombie-run cancellation:** Stop or a new Run bumps the runner's generation; any still-in-flight loop from the previous run aborts instead of racing the new one.
 - **Line-by-line execution highlighting** via `Runner.setLine(lineNum)` injection, synced with textarea scrolling at 20px line height.
 - **Per-terminal `ScriptRunner` class** with configurable API, editor, highlight, status, and interrupt key.
 - **Tab key indentation** (4 spaces) and scroll-sync for all code editors.
@@ -122,6 +123,43 @@ This document tracks all implemented features, active work, and planned mechanic
 - **Tab system** per terminal: Code, Log, API/Recipes.
 - **Speed controls:** Pause, 1x, 2x, 4x with active state highlighting.
 
+### 1.15 Special Request Handling
+- **Chef-side validation:** `handle_note(ticket)` marks a ticket's note as handled before plating.
+- **Ignored-note consequences:** if a noted order is served without `handle_note()`, the customer complains in plain language, the tip is forfeited, and reputation drops 0.3 (0.5 for Critics).
+- **Auto-chef fallback** marks every plated dish as note-handled.
+- **Five complaint strings** mapped per request in `src/mechanics.js`.
+
+### 1.16 Firmware Shop & Code Storage
+- **Firmware unlocks:** `nearest_table(status)` ($50) and `order_stock(qty)` ($85), persisted in saves.
+- **Locked-call guard:** calling locked firmware logs a plain-language warning and returns `null` / `false` instead of crashing.
+- **`nearest_table()`** resolves the closest `"free"`, `"order"` or `"served"` table from the calling robot's position.
+- **`order_stock()`** buys portions from code at $2 each, using the same stock as manual restock.
+- **Code storage:** one shared 25-line budget applied to every terminal (comments/blanks free), enforced before Run. RAM Expansion adds 15 lines for $80 (repeatable).
+- **Shop affordability:** buy buttons grey out automatically when cash is below the listed price, and re-enable when the player can afford them.
+
+### 1.17 Handbook Window
+- **Dedicated draggable window** opened from `📖 Handbook` in the HUD.
+- **4 pages:** Terminal Basics, Waiter Robot, Chef & Special Requests, Firmware & Fleet.
+- **Prev / Next navigation** with page counter.
+- Waiter terminal keeps a compact API cheat-sheet tab; chef keeps recipe cards.
+
+### 1.18 Robot Wear & Repair
+- **Wear:** each grid tile moved costs 0.4 durability (`BalanceConfig.wearPerTile`).
+- **Degradation:** at 20% health or below, movement speed drops 40%.
+- **API:** `health()` returns 0–100; `repair()` walks to the charger, takes 4s, and restores full health.
+- **Repair cost:** $15 during day, $5 at night (`BalanceConfig.repairCostDay/Night`). Full-health calls are free no-ops; insufficient cash fails cleanly.
+- **HUD:** `DUR` gauge turns red at 20% or below.
+- **Persistence:** both robots' health saved and restored.
+- **Default scripts:** both waiter scripts check `health() < 20` and call `repair()`, staying within the 25-line budget.
+- **Transpiler:** `repair` is in the async-call list, so the script actually waits for the charger trip and repair timer.
+
+### 1.19 Script Runner Freeze & Zombie Loop Fix (Oct 20)
+- **Generational run guard:** `State.scriptGen[interruptKey]` increments on every Run/Stop. Transpiled loop headers call `Runner.cancelled(gen)` and break when superseded, killing the old ghost loop instead of running two scripts on one robot.
+- **Macrotask yield:** each loop iteration awaits `Runner.tick()` (a 0ms `setTimeout`). A user script whose calls all fail synchronously (for example `seat()` on an occupied table, `repair()` without cash) can no longer starve the event loop and brick the UI.
+- **Async helpers honour cancellation:** `robotMoveTo()`, `scriptWait()`, `sleepTick()`, `go_charge()`, `repair()`, `seat()`, `take_order()` and `deliver()` capture the run generation and bail on mismatch, so a cancelled robot stops mid-walk.
+- **Chef interrupt key fixed:** `cook()` and `wait()` now use `chefScriptInterrupt`, so the Chef Stop/Pause controls actually take effect; `chefScriptPaused` added.
+- **Race guards:** `take_order()` re-checks occupancy after the 0.7s delay (previously a customer walking out crashed the script), `seat()` re-checks the table and returns the party to the queue if cancelled, `deliver()` releases a claimed dish back to the counter on cancellation and discards it if the table emptied.
+
 ---
 
 ## 2. In Development
@@ -138,21 +176,19 @@ Features listed below are sourced from the PRD and design discussions. Priority 
 
 | Feature | PRD Section | Notes |
 | --- | --- | --- |
-| Firmware Shop & API Unlocks | §9 | Progressive command unlocks: `nearest_table()` ($50), `order_stock()` ($85), code storage line limit upgrades. Extends Shop panel. |
-| Handbook Pages | §10 | 3–5 in-game Python lesson pages unlocked by restaurant progression. Teaches variables, loops, functions, lists. |
-| Special Request Handling | §7, §8 | Chef terminal interprets `ticket.note` strings (e.g. "no onions"). Wrong interpretation triggers specific complaint. |
+| Firmware Shop & API Unlocks | §9 | ✅ `nearest_table()` ($50), `order_stock()` ($85), RAM Expansion (+15 lines, $80). |
+| Special Request Handling | §7, §8 | ✅ `handle_note(ticket)`; ignored notes forfeit tip and cost reputation. |
+| Handbook Pages | §10 | ✅ 4-page Handbook window (basics, waiter, chef, firmware). |
 
 ### 3.2 Medium Priority (Should / Polish)
 
 | Feature | PRD Section | Notes |
 | --- | --- | --- |
 | Table Reservations | §7 | Booked parties arrive at set times. Waiter code must hold tables with `is_reserved(table)`. |
-| Code Storage Limits | §9 | Per-terminal line cap, upgradable in shop. Rewards concise code. |
 | Step-Through Debugging Enhancement | §5, §10 | Current step button exists but could be improved with breakpoints and variable watch. |
 | More Customer Archetypes | §7 | Family (group with child, may order toys), Shift Worker, Mystery Regular. |
 | Obstacle Avoidance (spills) | §6 | Dynamic floor obstacles that block pathfinding temporarily. |
 | Refund System | §7 | Wrong orders trigger partial refunds; complaint severity determines refund amount. |
-| Robot Wear & `repair()` | §6 | Wear accumulates over time, `repair()` call takes robot offline. Cheaper during quiet hours. |
 
 ### 3.3 Low Priority (Later / Final Version)
 
@@ -187,6 +223,8 @@ Features listed below are sourced from the PRD and design discussions. Priority 
 | `index.html` | DOM structure, canvas viewport, HUD, all draggable window containers |
 | `style.css` | Pixel-art styling, day/night gradients, window styles, achievement cards, execution highlight |
 | `src/game.js` | Core simulation loop, renderer, pathfinder, customer state machine, Chef/Waiter APIs, transpiler, script runner |
+| `src/mechanics.js` | Pure helpers: nearest-table selection, code-line counting, special-request checks and complaint text |
+| `tests/mechanics.test.js` | Assert-based checks for `src/mechanics.js` (`node tests/mechanics.test.js`) |
 | `TRAYnERROR PRD.md` | Full game design document and requirements specification |
 | `logs.md` | This file — development progress tracker |
 | `assets/restaurant/` | Wall, floor, and furniture pixel art sprites |

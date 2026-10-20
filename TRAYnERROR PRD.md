@@ -181,7 +181,7 @@ Revenue from satisfied customers funds two competing upgrade paths, so the playe
 | Robot | Battery life, speed, tray capacity, endurance, processor, looks | ✅ Fast Servos ($140), Battery ($180), Double Tray ($240) |
 | Staff | Hire extra waiters, each with its own terminal | ✅ Waiter #2 ($320) |
 
-**Firmware unlocks.** Progression equals getting new commands. API functions are bought in the shop, so each unlock gives the player a new capability to program with. Python concepts (functions, lists, dicts, classes, recursion) unlock tied to restaurant needs, and the handbook teaches each one.
+**Firmware unlocks.** Progression equals getting new commands. API functions are bought in the shop, so each unlock gives the player a new capability to program with. Python concepts (functions, lists, dicts, classes, recursion) unlock tied to restaurant needs, and the handbook teaches each one. **Prototype status:** ✅ `nearest_table(status)` ($50), `order_stock(qty)` ($85), RAM Expansion (+15 lines, $80).
 
 **Code storage limit.** Each terminal has a line limit that can be upgraded, which rewards short, reusable code.
 
@@ -194,7 +194,7 @@ The shop's prices, costs and customer volume all live in one central `BalanceCon
 The game teaches through consequences: customers' complaints double as the error log, so players learn what broke by reading how the restaurant reacted.
 
 - **Complaint log as error feedback.** Complaints read like customer remarks but hint at the bug: "Table 3 waited forever" (seating or delivery too slow), "I got someone else's dish" (wrong table), "my omelette had no egg" (unchecked `grab()`). **Prototype status:** ✅ Implemented with contextual plain-language complaints and customer emotes (💭📝⏳😠🍽️).
-- **Handbook and recipe cards.** Short Python lessons unlock when the restaurant needs them, written for beginners with analogies and examples. **Prototype status:** Recipe cards implemented; handbook pages planned.
+- **Handbook and recipe cards.** Short Python lessons unlock when the restaurant needs them, written for beginners with analogies and examples. **Prototype status:** Recipe cards implemented; 4-page Handbook window implemented (basics, waiter, chef, firmware).
 - **Event log and friendly errors.** Plain-language messages with line numbers, plus a log of every robot action. **Prototype status:** ✅ Implemented.
 - **Step-through and slow motion.** Players can watch a script run one action at a time. **Prototype status:** ✅ Step button implemented; slow motion planned.
 - **Black-box recorder (final version).** Replays the last 30 seconds before a failure.
@@ -255,8 +255,8 @@ The prototype ships only the Must items, which are enough to play the whole core
 | Priority | Features |
 | --- | --- |
 | Must | ~~Code editor and interpreter~~ ✅; ~~Run / Pause / Stop~~ ✅; ~~fixed-timestep simulation~~ ✅; ~~game speed 1x / 2x / 4x~~ ✅; ~~waiter terminal~~ ✅; ~~seating and delivery~~ ✅; ~~customer arrival and orders with a hidden wait time~~ ✅; ~~2-3 archetypes~~ ✅ (4 implemented); ~~reputation stars~~ ✅; ~~complaint log~~ ✅; ~~battery~~ ✅; ~~day/night tint with `is_night()`~~ ✅; ~~2-3 upgrades~~ ✅ (4 upgrades); ~~central balance config~~ ✅; ~~main menu with Start Game, Load Game and Settings~~ ✅; ~~autosave~~ ✅; ~~asset manifest with placeholder art and audio~~ ✅ |
-| Should | ~~Chef terminal with 2-3 simple recipes~~ ✅; ~~special requests as strings~~ ✅ (40% chance on orders); ~~manual stock panel~~ ✅; ~~groups and parties~~ ✅ (2 or 4 person); ~~step-through debugging~~ ✅; 3-5 handbook pages; ~~meal-rush mini-cycles~~ ✅ (4 rush periods); ~~two night customer types and one night-only item~~ ✅ |
-| Later | Reservations, refunds, firmware shop, code storage limits, ~~hired robots~~ ✅ (Waiter #2), ~~achievements~~ ✅ (7 milestones), repair(), obstacles, replay features, night visibility and tariffs, random events, ending and final reward |
+| Should | ~~Chef terminal with 2-3 simple recipes~~ ✅; ~~special requests as strings~~ ✅ (40% chance on orders, chef must call `handle_note`); ~~manual stock panel~~ ✅; ~~groups and parties~~ ✅ (2 or 4 person); ~~step-through debugging~~ ✅; ~~3-5 handbook pages~~ ✅ (4-page Handbook window); ~~meal-rush mini-cycles~~ ✅ (4 rush periods); ~~two night customer types and one night-only item~~ ✅ |
+| Later | Reservations, refunds, ~~firmware shop~~ ✅ (`nearest_table`, `order_stock`), ~~code storage limits~~ ✅ (25 lines + RAM Expansion), ~~hired robots~~ ✅ (Waiter #2), ~~achievements~~ ✅ (7 milestones), ~~robot wear & `repair()`~~ ✅, obstacles, replay features, night visibility and tariffs, random events, ending and final reward |
 
 **Suggested team split (8 people)**
 

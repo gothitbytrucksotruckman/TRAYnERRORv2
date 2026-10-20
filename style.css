@@ -120,6 +120,10 @@ body.night-mode {
   color: #4ade80;
 }
 
+#hud-health.low {
+  color: #f87171;
+}
+
 .cam-hint {
   color: #64748b;
   font-size: 11px;
@@ -493,6 +497,37 @@ body.night-mode {
   background: #1e1e2d;
   padding: 1px 4px;
   border-radius: 3px;
+}
+
+/* Handbook Window */
+.handbook-body {
+  padding: 12px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.handbook-body h4 {
+  color: #e2e8f0;
+  margin-bottom: 10px;
+}
+
+.hb-page { display: none; }
+.hb-page.active { display: block; }
+
+.hb-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #2e2e42;
+}
+
+#hb-page-label {
+  color: #94a3b8;
+  font-size: 11px;
 }
 
 /* Shop Body */
