@@ -1,0 +1,271 @@
+# Tray & Error — Development Log
+
+Last updated: Oct 20, 2026
+
+This document tracks all implemented features, active work, and planned mechanics. It is the living companion to `TRAYnERROR PRD.md` and serves as the source of truth for what exists in the codebase today.
+
+---
+
+## 1. Completed Features
+
+### 1.1 Core Engine & Renderer
+- **HTML5 Canvas 2D renderer** with nearest-neighbor scaling (`imageSmoothingEnabled = false`), 32px tile grid.
+- **Fixed-timestep simulation** at 30 ticks/sec. Game speeds 1x, 2x, 4x scale accumulator steps and async delays.
+- **Modular wall rendering:** inner wall top, outer wall bottom, side walls left/right. Side walls overlap inner walls at corners.
+- **Wood floor tiles** covering a 14×10 grid.
+- **Interactive camera:** drag-to-pan, mouse-wheel zoom (0.8x–4.5x), double-click recenter.
+- **Outer wall transparency:** fades to 35% opacity when any robot is behind it, togglable via settings checkbox.
+
+### 1.2 Restaurant Layout
+- **6 tables:** 4 small (2-seat) and 2 vertical long (4-seat), arranged with wall spacing.
+- **Entrance tile** at left wall `(0, 4)`.
+- **Kitchen pickup counter** at right wall `(13, 4)` with stove icon (🍳 idle / 🔥 cooking).
+- **Charger station #1** at `(1, 0)` for Waiter Robot #1.
+- **Charger station #2** at `(2, 0)` for Hired Waiter Robot #2 (visible only when hired).
+- **Ready dish counter** with red badge showing unclaimed dish count.
+
+### 1.3 Robot Waiter #1
+- **4-directional BFS pathfinding** with strict Manhattan movement and obstacle avoidance (tables, chairs).
+- **4-directional sprite rendering** using `front-view.png`, `back-view.png`, `left-side-view.png`, `right-side-view.png`.
+- **Battery system:** drains during movement, recharges at charger station. Drain rate halved with battery upgrade.
+- **Tray system:** carries 1 dish (upgradable to 2 with Double Tray Module).
+- **0.7s order delay** when taking orders at a table.
+- **Waiter Terminal** with Run, Pause/Resume, Step, Stop controls.
+
+### 1.4 Hired Waiter Robot #2
+- **Purchasable** from Shop for $320.
+- **Cyan-tinted sprite** via `hue-rotate(160deg) saturate(1.4)` CSS filter.
+- **Independent terminal** (`win-waiter2`) with full Run/Pause/Step/Stop and line-by-line execution highlight.
+- **Shared API factory** (`createWaiterAPI`) generates per-robot APIs keyed to correct robot state, charger, and interrupt flag.
+- **Atomic `claim(dish)`:** returns `true` only for the first robot to call it, preventing plate contention.
+- **Concurrent race check** on `take_order()`: if two robots approach the same table, only the first succeeds.
+
+### 1.5 Chef Terminal
+- **Dual operation mode:** automatic background cooking when idle (`chefMode: 'auto'`), manual Python scripting when run (`chefMode: 'scripted'`).
+- **Recipe cards** in Recipes tab: Omelette ($10), Pancake Stack ($12), Midnight Ramen ($16).
+- **Ticket processing:** `tickets()`, `next_ticket()`, `grab()`, `cook()`, `plate()`.
+- **Stove visual feedback:** icon switches between 🍳 and 🔥 based on cooking state.
+- **Independent script runner** with execution highlighting.
+
+### 1.6 Python-to-JS Transpiler & Script Runner
+- **Async sandboxed transpiler** converting Python syntax (`while True:`, `if/elif/else`, `for`, function calls, variable assignment) to async JS functions.
+- **Loop execution watchdog:** every transpiled loop iteration awaits a macrotask and checks a per-runner generation token, so runaway loops cannot freeze the browser.
+- **Zombie-run cancellation:** Stop or a new Run bumps the runner's generation; any still-in-flight loop from the previous run aborts instead of racing the new one.
+- **Line-by-line execution highlighting** via `Runner.setLine(lineNum)` injection, synced with textarea scrolling at 20px line height.
+- **Per-terminal `ScriptRunner` class** with configurable API, editor, highlight, status, and interrupt key.
+- **Tab key indentation** (4 spaces) and scroll-sync for all code editors.
+
+### 1.7 Customer System
+- **4 archetypes:** Regular (patience: 85, tip: $2), Businessman (patience: 55, tip: $5), Critic (patience: 45, tip: $7), Night Owl (patience: 70, tip: $4, night-only).
+- **Party spawning:** 11–18s base interval, 7–11s during rush hours. Cap of 4 waiting parties.
+- **Party sizes:** 65% chance of 2-person, 35% chance of 4-person.
+- **Customer lifecycle:** arrive → wait at door → seated → thinking (3s) → order ready → order taken → waiting for food → eating (12s) → pay & leave.
+- **Contextual complaints:** plain-language messages for seating delays (*"Nobody seated us!"*), food delays (*"Where is our food?!"*), and stock failures (*"Out of stock!"*).
+- **Customer emotes:** 💭 (thinking), 📝 (ready to order), ⏳ (waiting for food), 😠 (impatient), 🍽️ (eating).
+
+### 1.8 Day/Night Cycle & Rush Hours
+- **24-hour clock** with configurable day length (default 600s real time = 24 game hours).
+- **4 rush hour periods:** Breakfast (7:30–9:30), Lunch (12:00–14:00), Dinner (18:00–20:30), Late Night (23:00–1:30).
+- **Rush hour HUD banner** with animated glow badge.
+- **Night detection** (`isNight()`: 20:00–06:00) for menu switching and customer archetype filtering.
+- **Night atmosphere rendering:** dark overlay (`rgba(10, 15, 30, 0.38)`) with warm radial lamp glow over each table and kitchen stove.
+
+### 1.9 Economy & Balance (Rebalanced Oct 20)
+- **Starting cash:** $50.
+- **Daily rent:** $35.
+- **Menu prices (revenue nerfed):**
+  - Day: Sunny Toast $8, Omelette $10, Pancake Stack $12.
+  - Night: Black Coffee & Pie $12, Midnight Ramen $16.
+- **Tips:** $2–$7 per archetype. Seat bonus: +$1/seat.
+- **Typical table bill:** $11–$24.
+- **Ingredient restock:** $20 for 10 portions.
+- **Reputation:** 1.0–5.0 stars, boosted by successful service, penalized by complaints.
+- **Central `BalanceConfig` object** for all tunable values.
+
+### 1.10 Shop & Upgrades (Prices raised Oct 20)
+| Upgrade | Cost | Effect |
+| --- | --- | --- |
+| Ingredients Restock (+10) | $20 | Adds 10 stock portions |
+| Fast Servos | $140 | Robot moves 50% faster |
+| High-Capacity Battery | $180 | Battery drain halved |
+| Double Tray Module | $240 | Carry 2 dishes (both robots) |
+| Hire Waiter Robot #2 | $320 | Deploys cyan unit with own terminal |
+
+### 1.11 Achievements System
+- **7 achievements** with progress tracking, progress bars, and unlock notifications:
+  - 🌱 First Shift — serve 5 parties.
+  - 📦 Stockpile Specialist — store 30+ portions.
+  - 🦉 Night Owl — serve 3 night customers.
+  - ⭐ Five-Star Standard — reach 5.0 reputation.
+  - 🤖 Automation Fleet — hire Waiter #2.
+  - 💰 Profitable Kitchen — accumulate $500 cash.
+  - ⚡ Speed Demon — buy Fast Servos.
+- **No cash rewards.** Achievements are purely milestone-based trophies.
+- **Gold highlight + Locked/Unlocked badges** with animated progress bar fill.
+- **Persisted in save data.**
+
+### 1.12 Save/Load & Persistence
+- **Autosave** every 60 seconds real time + on day rollover.
+- **Manual save** from Settings modal.
+- **Data persisted:** cash, reputation, day, time, stock, all upgrades, hired waiter flag, totalServed, totalNightServed, achievement unlock states, all terminal code.
+- **Load** restores UI state (disabled shop buttons, waiter #2 HUD visibility).
+- **Reset save** with confirmation dialog.
+
+### 1.13 Audio
+- **Web Audio API synth** (no external audio files needed).
+- **Sound effects:** beepServe (seating/delivery), beepPay (payment), beepComplaint (complaints), beepCharge (recharge complete).
+- **Volume slider** in Settings modal.
+
+### 1.14 UI & Windows
+- **Main menu** with Start Game, Load Game, Settings buttons.
+- **HUD bar:** reputation stars, cash, day counter, game time, battery %, rush hour badge.
+- **Draggable window panels** for Waiter, Waiter #2, Chef, Shop, Achievements, Settings.
+- **Tab system** per terminal: Code, Log, API/Recipes.
+- **Speed controls:** Pause, 1x, 2x, 4x with active state highlighting.
+
+### 1.15 Special Request Handling
+- **Chef-side validation:** `handle_note(ticket)` marks a ticket's note as handled before plating.
+- **Ignored-note consequences:** if a noted order is served without `handle_note()`, the customer complains in plain language, the tip is forfeited, and reputation drops 0.3 (0.5 for Critics).
+- **Auto-chef fallback** marks every plated dish as note-handled.
+- **Five complaint strings** mapped per request in `src/mechanics.js`.
+
+### 1.16 Firmware Shop & Code Storage
+- **Firmware unlocks:** `nearest_table(status)` ($50) and `order_stock(qty)` ($85), persisted in saves.
+- **Locked-call guard:** calling locked firmware logs a plain-language warning and returns `null` / `false` instead of crashing.
+- **`nearest_table()`** resolves the closest `"free"`, `"order"` or `"served"` table from the calling robot's position.
+- **`order_stock()`** buys portions from code at $2 each, using the same stock as manual restock.
+- **Code storage:** one shared 25-line budget applied to every terminal (comments/blanks free), enforced before Run. RAM Expansion adds 15 lines for $80 (repeatable).
+- **Shop affordability:** buy buttons grey out automatically when cash is below the listed price, and re-enable when the player can afford them.
+
+### 1.17 Handbook Window
+- **Dedicated draggable window** opened from `📖 Handbook` in the HUD.
+- **4 pages:** Terminal Basics, Waiter Robot, Chef & Special Requests, Firmware & Fleet.
+- **Prev / Next navigation** with page counter.
+- Waiter terminal keeps a compact API cheat-sheet tab; chef keeps recipe cards.
+
+### 1.18 Robot Wear & Repair
+- **Wear:** each grid tile moved costs 0.4 durability (`BalanceConfig.wearPerTile`).
+- **Degradation:** at 20% health or below, movement speed drops 40%.
+- **API:** `health()` returns 0–100; `repair()` walks to the charger, takes 4s, and restores full health.
+- **Repair cost:** $15 during day, $5 at night (`BalanceConfig.repairCostDay/Night`). Full-health calls are free no-ops; insufficient cash fails cleanly.
+- **HUD:** `DUR` gauge turns red at 20% or below.
+- **Persistence:** both robots' health saved and restored.
+- **Default scripts:** both waiter scripts check `health() < 20` and call `repair()`, staying within the 25-line budget.
+- **Transpiler:** `repair` is in the async-call list, so the script actually waits for the charger trip and repair timer.
+
+### 1.19 Script Runner Freeze & Zombie Loop Fix (Oct 20)
+- **Generational run guard:** `State.scriptGen[interruptKey]` increments on every Run/Stop. Transpiled loop headers call `Runner.cancelled(gen)` and break when superseded, killing the old ghost loop instead of running two scripts on one robot.
+- **Macrotask yield:** each loop iteration awaits `Runner.tick()` (a 0ms `setTimeout`). A user script whose calls all fail synchronously (for example `seat()` on an occupied table, `repair()` without cash) can no longer starve the event loop and brick the UI.
+- **Async helpers honour cancellation:** `robotMoveTo()`, `scriptWait()`, `sleepTick()`, `go_charge()`, `repair()`, `seat()`, `take_order()` and `deliver()` capture the run generation and bail on mismatch, so a cancelled robot stops mid-walk.
+- **Chef interrupt key fixed:** `cook()` and `wait()` now use `chefScriptInterrupt`, so the Chef Stop/Pause controls actually take effect; `chefScriptPaused` added.
+- **Race guards:** `take_order()` re-checks occupancy after the 0.7s delay (previously a customer walking out crashed the script), `seat()` re-checks the table and returns the party to the queue if cancelled, `deliver()` releases a claimed dish back to the counter on cancellation and discards it if the table emptied.
+
+### 1.20 Table Reservations (Oct 22 — PRD §7)
+- **Advance booking cycle:** Customers book tables 35s in advance via telephone booking (`BalanceConfig.reservationIntervalMin/Max`).
+- **Table holding:** A reserved table displays a gold `🔖RES` badge on the canvas. `is_reserved(table)` returns `true`, and `free_tables()` excludes reserved tables by default so basic scripts do not give away reserved seats to walk-ins.
+- **Seating validation:** `seat()` checks `Mechanics.canSeatParty()`. Attempting to seat an ordinary walk-in at a reserved table is cleanly rejected with a warning log.
+- **VIP arrival & reward:** When the VIP arrives at the door, seating them marks the reservation fulfilled and clears the hold. Completing dinner pays a **+$15 VIP bonus** on top of the bill and tip.
+- **Stolen table penalty:** If a player forces a walk-in onto a reserved table or ignores the hold, the arriving VIP complains, inflicts a heavy -1.2 reputation hit, and triggers a $20 compensation refund.
+- **HUD notification:** Upcoming reservation badge `🔖 RES T#X (Xs)` renders in the top HUD.
+
+### 1.21 Dynamic Floor Spills & Obstacle Avoidance (Oct 22 — PRD §6)
+- **Floor puddles:** Diners occasionally drop coffee or soup puddles (`BalanceConfig.spillIntervalMin/Max`, max 2 active).
+- **Puddle rendering:** Canvas renders animated fluid puddles with specular droplet highlights.
+- **Smart BFS obstacle avoidance:** `findPath()` routes around active floor spills using 4-directional BFS pathfinding.
+- **Slip consequences:** If a robot steps on an unmopped spill, it slips, suffers a -3 durability hit (`BalanceConfig.spillWearPenalty`), and emits a squish audio warning.
+- **Waiter API:**
+  - `spills()`: Returns array of active puddle coordinates `[{ id, x, y, type }]`.
+  - `clean(spill)`: Async waiter action (`BalanceConfig.spillCleanDuration`, 1.5s). Waiter navigates directly to the spill, mops it up, earns +0.05 restaurant reputation, and removes the hazard. Added to transpiler `asyncMethods`.
+
+### 1.22 Customer Complaint & Refund System (Oct 22 — PRD §7)
+- **Cash consequences:** Mistakes and customer neglect now directly drain restaurant cash reserves through `issueRefund()` and `Mechanics.calculateRefund()`.
+- **Tiered refund amounts:**
+  - Ignored special note: Forfeits tip + $5 compensation voucher ($8 for Critics).
+  - Delayed food walkout: $10 compensation refund ($16 for Critics).
+  - Walkout at entrance: $0 for standard walkouts, $6 voucher for Critics.
+  - Kitchen stockout on order: $8 apology credit.
+  - Stolen/unhonored reservation: $20 VIP compensation voucher.
+- **Audio & Logging:** Descending minor chord audio synth (`AudioEngine.beepRefund()`) and red complaint logging.
+- **Persistence:** `totalRefunds` saved and loaded from local storage.
+
+### 1.23 New Customer Archetypes (Oct 22 — PRD §7)
+- **Family:** Party size 4 (always), 65 patience, generous $8 tip. Perfect for long tables.
+- **Shift Worker:** Rush diner, 50 patience, modest $3 tip, eats 2x faster (6s instead of 12s).
+
+### 1.24 Handbook Page 5 & New Achievements (Oct 22 — PRD §10)
+- **Handbook expansion:** Added page 5 (`5. Reservations, Spills & Refunds`) explaining `is_reserved()`, `reservations()`, `spills()`, `clean()`, and refund rules.
+- **2 new achievements:**
+  - 👑 **VIP Host:** Successfully seat and serve 2 reserved tables.
+  - 🧹 **Floor Technician:** Clean 3 floor spills with your robot.
+- **API cheatsheet:** Waiter terminal Handbook tab updated with Reservations & Spills section.
+
+---
+
+## 2. In Development
+
+*No features are actively in development at this moment. The codebase is stable and ready for the next planned feature.*
+
+---
+
+## 3. Planned Features
+
+Features listed below are sourced from the PRD and design discussions. Priority order is approximate; items will be added and reordered as development continues.
+
+### 3.1 High Priority (Prototype Scope)
+
+| Feature | PRD Section | Notes |
+| --- | --- | --- |
+| Firmware Shop & API Unlocks | §9 | ✅ `nearest_table()` ($50), `order_stock()` ($85), RAM Expansion (+15 lines, $80). |
+| Special Request Handling | §7, §8 | ✅ `handle_note(ticket)`; ignored notes forfeit tip and cost reputation. |
+| Handbook Pages | §10 | ✅ 5-page Handbook window (basics, waiter, chef, firmware, reservations & spills). |
+
+### 3.2 Medium Priority (Should / Polish)
+
+| Feature | PRD Section | Notes |
+| --- | --- | --- |
+| Table Reservations | §7 | ✅ Booked parties arrive at set times. `is_reserved(table)`, `reservations()`, VIP bonus. |
+| Obstacle Avoidance (spills) | §6 | ✅ Dynamic floor obstacles, BFS rerouting, slip durability penalty, `spills()`, `clean()`. |
+| Refund System | §7 | ✅ Severity-based compensation vouchers deducted from cash for service failures. |
+| More Customer Archetypes | §7 | ✅ Family (size 4, $8 tip) and Shift Worker (2x fast eater) implemented. |
+| Step-Through Debugging Enhancement | §5, §10 | Current step button exists; breakpoints and variable watch planned for later. |
+
+### 3.3 Low Priority (Later / Final Version)
+
+| Feature | PRD Section | Notes |
+| --- | --- | --- |
+| Replay & Ghost System | §11 | Deterministic replay of shifts, ghost overlays of top players' runs. |
+| Daily Challenge Seeds | §11 | Shared seed for competitive scoring on revenue/time/line count. |
+| Code-Golf Scoring | §11 | Rank solutions by line count or instruction budget. |
+| Sandbox Shifts | §11 | Practice shifts without risking save data. |
+| Script Sharing & Import | §11 | Share/import player scripts (requires sanitization). |
+| Random Events | §18 | Blackout, health inspector visit, delivery delays. |
+| Night Visibility & Power Tariff | §4 | Reduced vision radius at night, cheaper power costs. |
+| Modular Robot Parts | §18 | Swappable wheels, arms, trays, sensors. |
+| Restaurant Tiers & Ending | §18 | Small cafe → flagship progression with final inspection event. |
+| Accessibility Options | §18 | Colorblind mode, font size scaling, localization. |
+
+---
+
+## 4. Economy Balance History
+
+| Date | Change | Reason |
+| --- | --- | --- |
+| Oct 19 | Initial economy: $150 start, $14–$28 dish prices, $60–$120 upgrades | First playable build |
+| Oct 20 | Rebalanced: $50 start, $8–$16 dish prices, tips $2–$7, upgrades $140–$320, rent $35 | Revenue too easy, upgrades felt unrewarding |
+
+---
+
+## 5. File Reference
+
+| File | Purpose |
+| --- | --- |
+| `index.html` | DOM structure, canvas viewport, HUD, all draggable window containers |
+| `style.css` | Pixel-art styling, day/night gradients, window styles, achievement cards, execution highlight |
+| `src/game.js` | Core simulation loop, renderer, pathfinder, customer state machine, Chef/Waiter APIs, transpiler, script runner |
+| `src/mechanics.js` | Pure helpers: nearest-table selection, code-line counting, special-request checks and complaint text |
+| `tests/mechanics.test.js` | Assert-based checks for `src/mechanics.js` (`node tests/mechanics.test.js`) |
+| `TRAYnERROR PRD.md` | Full game design document and requirements specification |
+| `logs.md` | This file — development progress tracker |
+| `assets/restaurant/` | Wall, floor, and furniture pixel art sprites |
+| `assets/robot-waiter/` | 4-directional robot sprites |
+| `assets/gui/` | Menu buttons and title logo |
