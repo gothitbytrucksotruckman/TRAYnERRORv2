@@ -1,0 +1,10 @@
+{
+  "name": "traynerror",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tray & Error — restaurant automation prototype",
+  "scripts": {
+    "dev": "node scripts/dev-server.js",
+    "test": "node tests/mechanics.test.js && node tests/accounts.test.js"
+  }
+}

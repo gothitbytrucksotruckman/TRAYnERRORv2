@@ -1,7 +1,7 @@
 # Tray & Error — PRD v1.1
 
 Oct 12, 2026 · @Rangga Arsandy
-Updated Oct 20, 2026 · Prototype implementation status synced with `logs.md`
+Updated Oct 24, 2026 · Prototype implementation status synced with `logs.md`
 
 ## 1. Vision and design pillars
 
@@ -80,7 +80,7 @@ Original syntax or game-specific logic is allowed only where it cannot confuse a
 - A `wait(seconds)` function is available so players do not busy-loop.
 - Errors show as friendly messages in the terminal and in the event log, with the line number.
 
-**Debug tools:** step-through (implemented), line-by-line execution highlighting (implemented), event log (implemented), slow motion, and a recorder of the last 30 seconds before a failure (final version).
+**Debug tools:** step-through (implemented), line-by-line execution highlighting (implemented), event log (implemented), gutter breakpoints with a collapsible variable watch panel (implemented), slow motion, and a recorder of the last 30 seconds before a failure (final version).
 
 ## 6. Robots and terminals
 
@@ -107,7 +107,7 @@ The restaurant has two robot roles, the waiter and the chef, and every robot, in
 - Battery is finite. Charging costs time away from the floor, so it is a trade-off and not a chore.
 - Wear builds up, and a `repair()` call takes the robot out of service for a while. Repairs are cheaper in quiet hours.
 - Upgradable stats: battery life, speed, tray capacity, endurance, processor (instruction budget), and looks.
-- Each terminal has its own code storage limit, so one robot cannot starve another.
+- Each terminal has its own code storage limit, so one robot cannot starve another. **Prototype note:** one shared 25-line budget applies across all terminals (comments/blanks free) and RAM Expansion raises it.
 - Hiring extra waiters is capped early and costs real money. The counter is shared, so waiters use `claim(dish)`, which returns `True` only for the first robot that calls it. **Prototype note:** Waiter #2 costs $320 and uses atomic `claim(dish)` plus a concurrent race check on `take_order()` to prevent contention.
 
 Obstacles such as spills and other customers can block paths in the final version.
@@ -132,13 +132,13 @@ Customers are the main source of variety and pressure. There is no visible patie
 
 **Seating.** The waiter's code must match each party to a table with enough seats, and must not give away a reserved table. This teaches matching and packing.
 
-**Reservations.** Booked parties arrive at set times, so the code must hold tables ahead (final version).
+**Reservations.** Booked parties arrive after a countdown, so the code must hold tables ahead. **Prototype status:** ✅ implemented — `is_reserved(table)`, reserved badges on tables, and `free_tables()` skips holds. Seating a walk-in at a booked table loses both parties and 0.6 reputation.
 
 **Special requests as strings.** An order can carry a note such as "no onions, extra ice". The waiter reads the note and attaches it to the ticket, and the chef's code interprets it when cooking.
 
 **Orders beyond the menu.** Customers can also ask for desserts, toys and other miscellaneous items, not only the standard dishes.
 
-**Complaints, refunds and reputation.** A wrong order, a wrong table, a long wait or a bad dish produces a complaint. Complaints lower the reputation stars, and some trigger a refund (refunds are final-version scope). Reputation unlocks better customers and menu tiers, and customer volume rises with it.
+**Complaints, refunds and reputation.** A wrong order, a wrong table, a long wait or a bad dish produces a complaint. Complaints lower the reputation stars, and some trigger a refund. **Prototype status:** ✅ refunds implemented — the menu price is deducted on ignored notes, wrong dishes, or walkouts. Reputation unlocks better customers and menu tiers, and customer volume rises with it.
 
 **Rush hours.** Meal rushes raise arrival rates at set hours, so hardcoded timing breaks.
 
@@ -183,7 +183,7 @@ Revenue from satisfied customers funds two competing upgrade paths, so the playe
 
 **Firmware unlocks.** Progression equals getting new commands. API functions are bought in the shop, so each unlock gives the player a new capability to program with. Python concepts (functions, lists, dicts, classes, recursion) unlock tied to restaurant needs, and the handbook teaches each one. **Prototype status:** ✅ `nearest_table(status)` ($50), `order_stock(qty)` ($85), RAM Expansion (+15 lines, $80).
 
-**Code storage limit.** Each terminal has a line limit that can be upgraded, which rewards short, reusable code.
+**Code storage limit.** Each terminal has a line limit that can be upgraded, which rewards short, reusable code. **Prototype status:** ✅ one shared 25-line budget across all terminals (comments/blanks free); RAM Expansion (+15 lines) costs $80 and is repeatable.
 
 **Running costs.** Rent ($35/day), ingredients ($20/restock) and upkeep are charged per game day, so a static script slowly loses money as volume grows. The upgrade shop opens at any time.
 
@@ -256,7 +256,7 @@ The prototype ships only the Must items, which are enough to play the whole core
 | --- | --- |
 | Must | ~~Code editor and interpreter~~ ✅; ~~Run / Pause / Stop~~ ✅; ~~fixed-timestep simulation~~ ✅; ~~game speed 1x / 2x / 4x~~ ✅; ~~waiter terminal~~ ✅; ~~seating and delivery~~ ✅; ~~customer arrival and orders with a hidden wait time~~ ✅; ~~2-3 archetypes~~ ✅ (4 implemented); ~~reputation stars~~ ✅; ~~complaint log~~ ✅; ~~battery~~ ✅; ~~day/night tint with `is_night()`~~ ✅; ~~2-3 upgrades~~ ✅ (4 upgrades); ~~central balance config~~ ✅; ~~main menu with Start Game, Load Game and Settings~~ ✅; ~~autosave~~ ✅; ~~asset manifest with placeholder art and audio~~ ✅ |
 | Should | ~~Chef terminal with 2-3 simple recipes~~ ✅; ~~special requests as strings~~ ✅ (40% chance on orders, chef must call `handle_note`); ~~manual stock panel~~ ✅; ~~groups and parties~~ ✅ (2 or 4 person); ~~step-through debugging~~ ✅; ~~3-5 handbook pages~~ ✅ (4-page Handbook window); ~~meal-rush mini-cycles~~ ✅ (4 rush periods); ~~two night customer types and one night-only item~~ ✅ |
-| Later | Reservations, refunds, ~~firmware shop~~ ✅ (`nearest_table`, `order_stock`), ~~code storage limits~~ ✅ (25 lines + RAM Expansion), ~~hired robots~~ ✅ (Waiter #2), ~~achievements~~ ✅ (7 milestones), ~~robot wear & `repair()`~~ ✅, obstacles, replay features, night visibility and tariffs, random events, ending and final reward |
+| Later | ~~Reservations~~ ✅, ~~refunds~~ ✅, ~~firmware shop~~ ✅ (`nearest_table`, `order_stock`), ~~code storage limits~~ ✅ (25 lines + RAM Expansion), ~~hired robots~~ ✅ (Waiter #2), ~~achievements~~ ✅ (7 milestones), ~~robot wear & `repair()`~~ ✅, ~~breakpoint debugger with variable watch~~ ✅, obstacles, replay features, night visibility and tariffs, random events, ending and final reward |
 
 **Suggested team split (8 people)**
 
@@ -352,24 +352,31 @@ The two largest risks are the Python runtime eating the week and scope far large
 
 ## 16. Main menu, saves and settings
 
-The game opens on a title menu with three buttons: Start Game, Load Game and Settings. Exit is skipped because the prototype runs in a web browser.
+The game opens on a title menu with three buttons: Start Game, Load Game and Settings. Exit is skipped because the prototype runs in a web browser. **Prototype status:** ✅ implemented, plus two accounts — Player (default, empty editors) and Developer.
 
 | Button | What it does |
 | --- | --- |
-| Start Game | Begins a new restaurant with the gentle early game and the first handbook pages |
+| Start Game | Begins a new restaurant with the gentle early game and the first handbook pages; code editors start empty |
 | Load Game | Lists the available save files, including the autosave, and loads the one the player picks |
 | Settings | Sets music volume and sound effect volume |
+| Hidden dev dot (bottom-right) | Enters the Developer account with the default waiter, chef and waiter #2 programs pre-filled for immediate testing |
+
+**Accounts**
+
+- **Player account** is the default on load. All terminals start blank so the prototype is played from zero.
+- **Developer account** is reached only through the near-invisible dot in the title screen's bottom-right corner. It pre-fills the working default programs, so a tester can press Run without retyping code every session.
+- Each account has its own save key (`traynerror_savedata_player`, `traynerror_savedata_dev`); a `DEV` badge marks the HUD while in developer mode. Legacy single-key saves migrate into the player account.
 
 **Saves**
 
 - Autosave runs automatically (every 60 real seconds + on day rollover) so progress is never lost, and it appears as its own entry in Load Game. ✅ Implemented.
-- A save holds each terminal's script (waiter, chef, waiter #2), money, reputation, stock, upgrades, hired robot state, achievement unlock states, totalServed, totalNightServed, and the day count. ✅ Implemented.
+- A save holds each terminal's script (waiter, chef, waiter #2), money, reputation, stock, upgrades, hired robot state, achievement unlock states, totalServed, totalNightServed, and the day count. ✅ Implemented. Player and developer saves are stored under separate keys.
 - In the web prototype, saves and settings live in the browser, so they belong to one browser unless export is added later.
 
 **Still to decide**
 
 - [x] How often autosave runs (for example once per in-game day). **Resolved:** Every 60 real seconds + on day rollover.
-- [x] Whether players can also save manually, and how many slots. **Resolved:** Manual save from Settings modal; single slot (localStorage).
+- [x] Whether players can also save manually, and how many slots. **Resolved:** Manual save from Settings modal; one slot per account (localStorage).
 - [x] Whether Settings is also reachable from inside the game (a pause menu). **Resolved:** Yes, via ⚙ HUD button.
 
 ## 17. Assets and design replaceability
@@ -433,7 +440,7 @@ These items are still undecided or not yet scheduled.
 - [x] Should the prototype include a playable chef terminal, or an automatic cook with the chef terminal added later? **Resolved:** Both. Auto-cook runs by default; scripted mode activates when the player presses Run.
 - [ ] Which interpreter for the web prototype: Skulpt or Pyodide, decided by the day-1 spike? **Resolved:** Neither. A custom async Python-to-JS transpiler was built instead, keeping the prototype dependency-free. Pyodide/Skulpt remain options for the final version.
 - [x] How many hired waiters at launch, and what do they cost? **Resolved:** 1 hired waiter (Waiter #2) for $320.
-- [ ] Should restocking ever be automatable through a late firmware unlock such as `order_stock()`?
+- [x] Should restocking ever be automatable through a late firmware unlock such as `order_stock()`? **Resolved:** Yes. `order_stock(qty)` is a $85 firmware unlock at $2 per portion.
 - [ ] How are toys and miscellaneous items fulfilled: does the waiter pick them up from a shelf, or does the chef terminal prepare them?
 
 **Assumptions to confirm**

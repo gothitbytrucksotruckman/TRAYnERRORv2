@@ -49,6 +49,27 @@ body.night-mode {
   gap: 20px;
 }
 
+/* Hidden dev account entry: bottom-right of title screen */
+.dev-stealth-btn {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  padding: 2px 6px;
+  background: none;
+  border: none;
+  color: #444;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.25;
+  cursor: pointer;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.dev-stealth-btn:hover {
+  opacity: 1;
+  color: #888;
+}
+
 #menu-logo {
   max-width: 380px;
   max-height: 240px;
@@ -401,7 +422,119 @@ body.night-mode {
   height: 100%;
   overflow: hidden;
   background: #0d0d14;
+  display: flex;
 }
+
+.code-col {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+/* Breakpoint gutter: click a line number to toggle a breakpoint */
+.bp-gutter {
+  flex: 0 0 32px;
+  width: 32px;
+  overflow: hidden;
+  padding-top: 8px;
+  background: #0a0a11;
+  border-right: 1px solid #23233a;
+  color: #4b5563;
+  font-size: 10px;
+  text-align: right;
+  cursor: pointer;
+}
+
+.bp-line {
+  height: 20px;
+  line-height: 20px;
+  padding-right: 6px;
+  position: relative;
+}
+
+.bp-line:hover { color: #cbd5e1; }
+
+.bp-line.has-bp::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.8);
+}
+
+/* Live variable watch panel */
+.watch-panel {
+  flex: 0 0 150px;
+  width: 150px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #10101a;
+  border-left: 1px solid #23233a;
+  font-size: 10px;
+  transition: flex-basis 0.15s ease, width 0.15s ease;
+}
+
+.watch-panel.collapsed {
+  flex-basis: 26px;
+  width: 26px;
+}
+
+.watch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 4px 6px;
+  background: #151525;
+  border-bottom: 1px solid #23233a;
+  color: #63b3ed;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.watch-toggle {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 0 2px;
+}
+
+.watch-toggle:hover { color: #fff; }
+.watch-panel.collapsed .watch-body { display: none; }
+
+.watch-body {
+  flex: 1;
+  padding: 6px;
+  overflow-y: auto;
+  color: #cbd5e0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  user-select: text;
+}
+
+.watch-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  border-bottom: 1px dashed #1f1f33;
+  padding-bottom: 2px;
+}
+
+.watch-name { color: #a78bfa; }
+.watch-val { color: #e2e8f0; word-break: break-all; text-align: right; }
+.watch-empty { color: #4b5563; font-style: italic; }
 
 .line-highlight {
   position: absolute;
@@ -713,4 +846,139 @@ body.night-mode {
   justify-content: space-between;
   gap: 10px;
   font-size: 13px;
+}
+
+/* Tutorial Window */
+.tutorial-panel {
+  width: 560px;
+  max-height: 84vh;
+  border-color: #f0a03e;
+}
+
+.tutorial-panel .win-titlebar {
+  background: #3a2c1a;
+  border-bottom-color: #7a5220;
+}
+
+.tutorial-box {
+  padding: 16px 18px 18px;
+  gap: 12px;
+  overflow-y: auto;
+  background: #16161f;
+}
+
+.tutorial-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tutorial-badge {
+  background: #f0a03e;
+  color: #16161f;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  padding: 3px 8px;
+  border-radius: 3px;
+}
+
+.tutorial-paused {
+  color: #f0a03e;
+  font-size: 11px;
+}
+
+.tutorial-box h2 {
+  margin: 0;
+  font-size: 19px;
+  color: #f8fafc;
+}
+
+.tutorial-body {
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.tutorial-body code {
+  color: #93c5fd;
+  background: #1e1e2d;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.tutorial-api {
+  margin: 0;
+  padding: 10px 10px 10px 26px;
+  background: #101018;
+  border-left: 3px solid #6366f1;
+  border-radius: 3px;
+  color: #a5b4fc;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.tutorial-snippet-wrap {
+  background: #0b0b12;
+  border: 1px solid #2e2e42;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tutorial-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: #181826;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.tutorial-snippet-wrap pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.tutorial-snippet-wrap code {
+  color: #86efac;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tutorial-disable {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.tutorial-resume {
+  align-self: flex-end;
+  background: #2f855a;
+  border-color: #48bb78;
+  color: #f0fff4;
+  font-weight: bold;
+}
+
+.tut-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tut-review-btn {
+  text-align: left;
+  background: #1e1e2d;
+  border: 1px solid #2e2e42;
+  border-radius: 3px;
+  color: #93c5fd;
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tut-review-btn:hover {
+  background: #26263a;
+  border-color: #6366f1;
 }

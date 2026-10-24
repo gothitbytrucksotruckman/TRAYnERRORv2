@@ -111,6 +111,11 @@
     wearPerTile: 0.4,
     repairCostDay: 15,
     repairCostNight: 5,
+    reservationIntervalSec: 90,
+    reservationLeadSec: 25,
+    reservationPatienceSec: 45,
+    reservationPenalty: 0.6,
+    reservationSpawnSlowdown: 0.35,
     rushHours: [
       { name: 'Breakfast Rush', start: 7.5, end: 9.5, spawnMult: 0.65 },
       { name: 'Lunch Rush', start: 12.0, end: 14.0, spawnMult: 0.60 },
@@ -137,12 +142,114 @@
     ]
   };
 
+  // --- Accounts ---
+  // Player: empty editors, start from zero. Developer: ready-to-run defaults.
+  const DEV_DEFAULT_SCRIPTS = {
+    'code-editor': `# Robot Waiter Control
+# PRD Loop: seat -> take_order -> send_to_kitchen -> deliver
+while True:
+    if battery() < 20:
+        go_charge()
+
+    # Wear builds up while walking; service at the charger
+    if health() < 20:
+        repair()
+
+    dishes = ready_dishes()
+    if len(dishes) > 0:
+        dish = dishes[0]
+        if claim(dish):
+            deliver(dish, dish["table"])
+            continue
+
+    order = take_order()
+    if order:
+        send_to_kitchen(order)
+        continue
+
+    parties = waiting_parties()
+    free = free_tables()
+    if len(parties) > 0 and len(free) > 0:
+        seat(parties[0], free[0])
+        continue
+
+    wait(1)
+`,
+    'chef-code-editor': `# Chef Robot Control Script
+# Cooperates with Waiter via tickets & counter
+
+while True:
+    pending = tickets()
+    if len(pending) > 0:
+        ticket = pending[0]
+
+        # Check and grab ingredients (PRD Section 8)
+        if not grab("ingredients", 1):
+            print("Out of stock! Pausing for restock.")
+            wait(2)
+            continue
+
+        # Apply any special request (e.g. "no onions")
+        handle_note(ticket)
+
+        # Cooking time based on ticket
+        cook(4)
+
+        # Place finished dish on counter for waiter
+        plate(ticket)
+        continue
+
+    wait(1)
+`,
+    'waiter2-code-editor': `# Hired Waiter #2 Control
+# Cooperates with Waiter #1 via claim(dish)
+
+while True:
+    if battery() < 20:
+        go_charge()
+
+    # Wear builds up while walking; service at the charger
+    if health() < 20:
+        repair()
+
+    # Claim & deliver ready dishes
+    dishes = ready_dishes()
+    if len(dishes) > 0:
+        dish = dishes[0]
+        # Atomic claim: returns True only for first robot!
+        if claim(dish):
+            deliver(dish, dish["table"])
+            continue
+
+    # Help take orders from ready tables
+    order = take_order()
+    if order:
+        send_to_kitchen(order)
+        continue
+
+    # Seat remaining guests
+    parties = waiting_parties()
+    free = free_tables()
+    if len(parties) > 0 and len(free) > 0:
+        seat(parties[0], free[0])
+        continue
+
+    wait(1)
+`
+  };
+
+  const SAVE_KEY = account => `traynerror_savedata_${account === 'developer' ? 'dev' : 'player'}`;
+
   // --- Game State & Configuration ---
   const TILE_SIZE = 32;
   const GRID_COLS = 14;
   const GRID_ROWS = 10;
 
   const State = {
+    // Account
+    account: 'player',
+    started: false,
+
     // Economy & Progress
     cash: 50,
     reputation: 5.0, // 1 to 5
@@ -249,6 +356,7 @@
     waitingParties: [],
     nextPartyId: 1,
     nextPartyTimer: 5, // Arrives shortly after start
+    nextReservationTimer: 20, // First booking shortly after opening
 
     // Kitchen
     tickets: [],
@@ -258,7 +366,17 @@
     // Script Runner
     scriptRunning: false,
     scriptPaused: false,
-    scriptInterrupt: false
+    scriptInterrupt: false,
+
+    // Tutorial (player account only)
+    tutorialCompleted: [],
+    tutorialsDisabled: false,
+    tutorialOpen: false,
+    tutorialWasPaused: false,
+    tutorialIsReview: false,
+    tutorialSpeedOverride: false,
+    tutorialCooldown: 0,
+    tutorialFlags: {}
   };
 
   // Archetypes (Tuned for tighter, rewarding economy)
@@ -267,6 +385,153 @@
     { name: 'Businessman', patience: 55, tip: 5, chance: 0.25 },
     { name: 'Critic', patience: 45, tip: 7, chance: 0.15 },
     { name: 'Night Owl', patience: 70, tip: 4, chance: 0.1, nightOnly: true }
+  ];
+
+  // --- Tutorial milestones (player account) ---
+  // Each fires once, on the first shift where the situation actually happens.
+  // Showing a milestone pauses the whole simulation until the player resumes.
+  const TUTORIALS = [
+    {
+      id: 'tut_welcome',
+      badge: '📘 BASICS',
+      title: 'Welcome to Tray & Error',
+      body: 'You never serve a table by hand. You write Python, and the robots do the work.<br><br>Each terminal has <strong>Run</strong>, <strong>Pause</strong>, <strong>Step</strong> and <strong>Stop</strong>. Edits apply on the next Run. Scripts share a 25-line budget; blank lines and <code># comments</code> are free.<br><br><strong>Pace the world from the HUD:</strong> ⏸ Pause freezes everything, and 1x / 2x / 4x set how fast time moves. Pausing is always safe — rent, customers and robots hold still while you read, think or write. Tutorial cards pause the game on purpose for the same reason.<br><br>The door is on the left, the kitchen counter on the right. Keep a script running — an idle robot still costs rent.',
+      api: [
+        'wait(seconds) — pause the script instead of busy-looping',
+        'Run / Pause / Step / Stop — control the robot in the terminal toolbar',
+        'HUD ⏸ / 1x / 2x / 4x — freeze or speed up the whole restaurant',
+        'Pausing is free: nothing is lost, nothing expires'
+      ],
+      snippet: '# Start simple: keep the script alive\nwhile True:\n    wait(1)',
+      trigger: () => false
+    },
+    {
+      id: 'tut_first_customer',
+      badge: '🚪 CUSTOMERS',
+      title: 'Guests Are Waiting at the Door',
+      body: 'A party just arrived. Match the party size to a table with enough seats: small tables seat 2, long tables seat 4. Guests lose patience while they stand at the door — if nobody seats them, they complain and reputation drops.<br><br>Customers keep no visible timer. Watch their emote, the complaint log and your stars.',
+      api: [
+        'waiting_parties() — parties at the door: id, size, archetype',
+        'free_tables() — empty, unreserved tables: id, seats',
+        'seat(party, table) — walk the party to a table'
+      ],
+      snippet: 'parties = waiting_parties()\ntables = free_tables()\nif len(parties) > 0 and len(tables) > 0:\n    seat(parties[0], tables[0])',
+      trigger: () => State.waitingParties.length > 0
+    },
+    {
+      id: 'tut_order_ready',
+      badge: '📝 ORDERS',
+      title: 'The Party Is Ready to Order',
+      body: 'A seated party shows 📝 when it has decided. Take the order, then post the ticket to the kitchen. The ticket carries the dish, the price and sometimes a special request note.<br><br>Forgetting an order is the same as forgetting the guests: they wait, then complain.',
+      api: [
+        'take_order() — walks to the next table with a ready order and returns it',
+        'send_to_kitchen(order) — posts the ticket to the chef',
+        'order["note"] — the special request string, may be empty'
+      ],
+      snippet: 'order = take_order()\nif order:\n    send_to_kitchen(order)',
+      trigger: () => State.tables.some(t => t.orderReady && !t.orderTaken)
+    },
+    {
+      id: 'tut_food_plated',
+      badge: '🍳 KITCHEN',
+      title: 'A Dish Is Plated at the Counter',
+      body: 'The kitchen has plated a dish on the right-hand counter. Claim it before you carry it: <code>claim()</code> returns <code>True</code> for exactly one robot, so two waiters can never grab the same plate.<br><br>Deliver it to the table named on the dish. A wrong table wastes the dish and triggers a refund.',
+      api: [
+        'ready_dishes() — plated dishes: ticket_id, dish, table, note',
+        'claim(dish) — locks one dish for this robot',
+        'deliver(dish, table) — carries it from the counter to the table'
+      ],
+      snippet: 'dishes = ready_dishes()\nif len(dishes) > 0:\n    dish = dishes[0]\n    if claim(dish):\n        deliver(dish, dish["table"])',
+      trigger: () => State.readyDishes.length > 0
+    },
+    {
+      id: 'tut_low_battery',
+      badge: '🔋 POWER',
+      title: 'Battery Is Running Low',
+      body: 'Every step drains battery. When it empties the robot stops working and the floor goes silent.<br><br>On the HUD the <strong>BAT</strong> gauge shows charge. The charger station sits at the top-left corner, tile (1, 0). Charging costs time away from the floor, so do it off-peak or between orders.',
+      api: [
+        'battery() — current charge, 0 to 100',
+        'go_charge() — walk to the charger and refill to 100%'
+      ],
+      snippet: 'if battery() < 20:\n    go_charge()',
+      trigger: s => s.robot.battery <= 40
+    },
+    {
+      id: 'tut_low_health',
+      badge: '🔧 UPKEEP',
+      title: 'The Robot Is Wearing Down',
+      body: 'Movement wears the chassis: 0.4 durability per tile. Below 20% health the robot moves 40% slower, which quietly ruins every run.<br><br><code>repair()</code> walks to the charger, takes 4 seconds and restores full health. It costs $15 during the day, $5 at night. Calling it at full health is a free no-op.',
+      api: [
+        'health() — durability, 0 to 100',
+        'repair() — walk to the charger, pay, restore 100% health'
+      ],
+      snippet: 'if health() < 20:\n    repair()',
+      trigger: s => s.robot.health <= 60
+    },
+    {
+      id: 'tut_first_pay',
+      badge: '💰 ECONOMY',
+      title: 'First Payment Received',
+      body: 'The table paid the bill plus a tip. That money is your only income; rent, ingredients and repairs come out of it.<br><br>Rent is charged once per in-game day. Open <strong>📦 Shop</strong> to buy upgrades. Robot upgrades make the same code faster; firmware unlocks add new functions your scripts can call. Code storage can be expanded with RAM Expansion.',
+      api: [
+        'Shop → Fast Servos, High-Capacity Battery, Double Tray Module',
+        'Shop → Firmware: nearest_table(status), order_stock(qty)',
+        'Shop → RAM Expansion: +15 lines, repeatable'
+      ],
+      snippet: '',
+      trigger: s => s.totalServed >= 1
+    },
+    {
+      id: 'tut_night_shift',
+      badge: '🌙 NIGHT',
+      title: 'Night Shift Begins',
+      body: 'Hours 20:00–06:00 are night. The menu changes to Black Coffee & Pie and Midnight Ramen, the room dims, and Night Owl customers appear. Repairs are also cheaper at night.<br><br>Scripts that hardcode day-only dishes will start taking orders they cannot explain. Branch on <code>is_night()</code>.',
+      api: [
+        'is_night() — True during 20:00–06:00',
+        'time() — current in-game clock for your own schedules'
+      ],
+      snippet: 'if is_night():\n    wait(1)',
+      trigger: () => isNight()
+    },
+    {
+      id: 'tut_chef_terminal',
+      badge: '👨‍🍳 CHEF',
+      title: 'Scripting the Chef',
+      body: 'By default the chef cooks automatically in the background. Open the Chef terminal and press Run to take over: from then on your script must read tickets, take ingredients, cook and plate.<br><br>Special request notes are mandatory. Call <code>handle_note(ticket)</code> before plating or the customer complains and the tip is lost. A failed grab loses nothing — the stock check is your call.',
+      api: [
+        'tickets() — pending tickets: id, table, dish, note',
+        'grab(item, qty) — take stock; False when it runs out',
+        'handle_note(ticket) — acknowledge the special request',
+        'cook(seconds) / plate(ticket) — finish and put the dish on the counter'
+      ],
+      snippet: 'pending = tickets()\nif len(pending) > 0:\n    ticket = pending[0]\n    if grab("ingredients", 1):\n        handle_note(ticket)\n        cook(4)\n        plate(ticket)',
+      trigger: s => !!s.tutorialFlags.chefOpened
+    },
+    {
+      id: 'tut_reservations',
+      badge: '📅 RESERVATIONS',
+      title: 'A Table Is Reserved',
+      body: 'A table with a tent-card badge is booked for a party arriving soon. <code>free_tables()</code> already skips it, so matching by seat count stays safe.<br><br>Seating a walk-in on a reserved table loses both parties and 0.6 reputation. When the booked party arrives, seat it at its own table.',
+      api: [
+        'is_reserved(table) — True while the table is held',
+        'waiting_parties() — includes is_reserved and table for booked guests'
+      ],
+      snippet: '',
+      trigger: s => s.tutorialCompleted.includes('tut_first_customer') && s.tables.some(t => t.reservation)
+    },
+    {
+      id: 'tut_hired_waiter',
+      badge: '🤖 FLEET',
+      title: 'Waiter #2 Has Joined the Floor',
+      body: 'Two robots now share the counter and the tables. Each has its own terminal, script and battery, but they share the same plated dishes.<br><br><code>claim(dish)</code> is atomic: only the first caller gets the dish, so you can run the same delivery loop in both scripts without conflict.',
+      api: [
+        'claim(dish) — True for exactly one robot',
+        'tray() — dishes this robot is carrying',
+        'Each robot keeps its own battery, health and terminal'
+      ],
+      snippet: '',
+      trigger: s => s.hasHiredWaiter
+    }
   ];
 
   // --- Logging helper ---
@@ -333,19 +598,35 @@
     State.nextPartyTimer -= dt;
     if (State.nextPartyTimer <= 0) {
       const rush = getCurrentRush();
-      const mult = rush ? rush.spawnMult : 1.0;
-      State.nextPartyTimer = (11 + Math.random() * 7) * mult;
+      const reservedCount = State.tables.filter(t => t.reservation).length;
+      const mult = (rush ? rush.spawnMult : 1.0) * (1 + reservedCount * BalanceConfig.reservationSpawnSlowdown);
+      State.nextPartyTimer = (11 + Math.random() * 7) * mult * tutorialPacingFactor();
       spawnParty();
+    }
+
+    // Reservations: book ahead, then the booked party shows up at the door.
+    State.nextReservationTimer -= dt;
+    if (State.nextReservationTimer <= 0) {
+      State.nextReservationTimer = BalanceConfig.reservationIntervalSec * (0.8 + Math.random() * 0.6);
+      bookReservation();
+    }
+    for (const table of State.tables) {
+      const res = table.reservation;
+      if (!res || res.arrived) continue;
+      res.countdown -= dt;
+      if (res.countdown <= 0) arriveReservation(table);
     }
 
     // Update waiting queue
     for (let i = State.waitingParties.length - 1; i >= 0; i--) {
       const p = State.waitingParties[i];
       p.waitTimer += dt;
-      if (p.waitTimer > p.archetype.patience) {
+      const limit = p.is_reserved ? BalanceConfig.reservationPatienceSec : p.archetype.patience;
+      if (p.waitTimer > limit) {
         logMessage(`Party #${p.id} (${p.archetype.name}): "Nobody seated us! We waited forever at the door!"`, 'complaint');
         AudioEngine.beepComplaint();
         penalizeReputation(p.archetype.name === 'Critic' ? 1.0 : 0.3);
+        if (p.is_reserved) clearReservation(p.target_table);
         State.waitingParties.splice(i, 1);
       }
     }
@@ -368,7 +649,10 @@
             logMessage(`Table #${table.id} (${party.archetype.name}): "Where is our food?! We've been waiting for ages!"`, 'complaint');
             AudioEngine.beepComplaint();
             penalizeReputation(party.archetype.name === 'Critic' ? 1.0 : 0.4);
+            applyRefund(table.currentOrder && table.currentOrder.price, `Table #${table.id} walked out`);
             table.occupiedBy = null;
+            table.currentOrder = null;
+            table.wrongDish = false;
             table.orderReady = false;
             table.orderTaken = false;
             table.dishServed = false;
@@ -383,22 +667,35 @@
             // Finished meal!
             const basePrice = (table.currentOrder && table.currentOrder.price) ? table.currentOrder.price : 10;
             let bill = basePrice + party.size * 1 + party.archetype.tip;
-            if (Mechanics.specialRequestMissed(table.currentOrder, table.servedDish)) {
-              bill -= party.archetype.tip;
+            const noteMissed = Mechanics.specialRequestMissed(table.currentOrder, table.servedDish);
+            if (noteMissed) {
               penalizeReputation(party.archetype.name === 'Critic' ? 0.5 : 0.3);
               logMessage(`Table #${table.id} (${party.archetype.name}): "${Mechanics.noteComplaint(table.currentOrder.note)}"`, 'complaint');
               AudioEngine.beepComplaint();
+              applyRefund(basePrice, `Table #${table.id} special request ignored`);
+              bill = 0;
+            } else if (table.wrongDish) {
+              penalizeReputation(party.archetype.name === 'Critic' ? 0.5 : 0.4);
+              logMessage(`Table #${table.id} (${party.archetype.name}): "I got someone else's dish!"`, 'complaint');
+              AudioEngine.beepComplaint();
+              applyRefund(basePrice, `Table #${table.id} wrong dish served`);
+              bill = 0;
             }
             State.cash += bill;
             State.totalServed++;
             if (isNight()) State.totalNightServed++;
             updateAchievements();
             AudioEngine.beepPay();
-            logMessage(`Table #${table.id} finished dining, paid $${bill}.`, 'success');
-            boostReputation(0.1);
+            if (bill > 0) {
+              logMessage(`Table #${table.id} finished dining, paid $${bill}.`, 'success');
+              boostReputation(0.1);
+            } else {
+              logMessage(`Table #${table.id} left without paying.`, 'warn');
+            }
             table.occupiedBy = null;
             table.currentOrder = null;
             table.servedDish = null;
+            table.wrongDish = false;
             table.orderReady = false;
             table.orderTaken = false;
             table.dishServed = false;
@@ -408,11 +705,15 @@
     }
   }
 
+  function pickArchetype() {
+    const night = isNight();
+    const candidates = ARCHETYPES.filter(a => !a.nightOnly || night);
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  }
+
   function spawnParty() {
     if (State.waitingParties.length >= 4) return; // Cap queue at 4
-    const night = isNight();
-    let candidates = ARCHETYPES.filter(a => !a.nightOnly || night);
-    const chosenArchetype = candidates[Math.floor(Math.random() * candidates.length)];
+    const chosenArchetype = pickArchetype();
     const size = Math.random() < 0.65 ? 2 : 4;
     const party = {
       id: State.nextPartyId++,
@@ -425,6 +726,56 @@
     };
     State.waitingParties.push(party);
     logMessage(`Party #${party.id} (${party.archetype.name}, ${party.size} ppl) arrived at entrance.`, 'info');
+  }
+
+  // Reservations: a table is held for a party that has not arrived yet.
+  function bookReservation() {
+    // One hold at a time: six tables should never feel like a reservation queue.
+    if (State.tables.some(t => t.reservation)) return;
+    const candidates = State.tables.filter(t => !t.occupiedBy && !t.reservation);
+    if (candidates.length === 0) return;
+    const table = candidates[Math.floor(Math.random() * candidates.length)];
+    table.reservation = {
+      size: table.seats,
+      countdown: BalanceConfig.reservationLeadSec,
+      arrived: false,
+      partyId: null
+    };
+    logMessage(`Table #${table.id} reserved for ${table.seats} guests in ~${BalanceConfig.reservationLeadSec}s. Check is_reserved(table).`, 'info');
+  }
+
+  function arriveReservation(table) {
+    const res = table.reservation;
+    const party = {
+      id: State.nextPartyId++,
+      size: res.size,
+      archetype: pickArchetype(),
+      waitTimer: 0,
+      waitFoodTimer: 0,
+      seatedTime: 0,
+      eatTimer: 0,
+      is_reserved: true,
+      target_table: table.id
+    };
+    res.arrived = true;
+    res.partyId = party.id;
+    State.waitingParties.push(party);
+    logMessage(`Reserved party #${party.id} (${res.size} ppl) arrived for Table #${table.id}.`, 'info');
+  }
+
+  function clearReservation(tableId) {
+    const table = State.tables.find(t => t.id === tableId);
+    if (table) table.reservation = null;
+  }
+
+  function applyRefund(amount, reason) {
+    if (!amount) return;
+    State.cash -= amount;
+    logMessage(`Refunded $${amount}: ${reason}.`, 'complaint');
+    if (State.cash < 0) {
+      logMessage(`Cash is negative ($${State.cash}). Serve happy customers to recover.`, 'warn');
+    }
+    updateHUD();
   }
 
   function penalizeReputation(amount) {
@@ -872,6 +1223,15 @@
         }
       }
 
+      // Reservation tent card (held table)
+      if (table.reservation) {
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(tx + TILE_SIZE - 15, ty + 3, 11, 13);
+        ctx.fillStyle = '#78350f';
+        ctx.font = 'bold 8px monospace';
+        ctx.fillText('R', tx + TILE_SIZE - 12, ty + 12);
+      }
+
       // Table ID label
       ctx.fillStyle = '#cbd5e1';
       ctx.font = '9px monospace';
@@ -1076,14 +1436,21 @@
         return State.waitingParties.map(p => ({
           id: p.id,
           size: p.size,
-          archetype: p.archetype.name
+          archetype: p.archetype.name,
+          is_reserved: !!p.is_reserved,
+          table: p.target_table || null
         }));
       },
 
       free_tables() {
         return State.tables
-          .filter(t => !t.occupiedBy)
+          .filter(t => !t.occupiedBy && !t.reservation)
           .map(t => ({ id: t.id, seats: t.seats, x: t.x, y: t.y }));
+      },
+
+      is_reserved(tableObj) {
+        const table = State.tables.find(t => t.id === (tableObj && (tableObj.id || tableObj)));
+        return !!(table && table.reservation);
       },
 
       async seat(partyObj, tableObj) {
@@ -1094,6 +1461,24 @@
         if (!party || !table || table.occupiedBy) {
           logFn(`seat() failed: invalid party or table already occupied.`, 'warn');
           return false;
+        }
+
+        // Reserved table: only its own booking may sit there. Giving it away to a
+        // walk-in loses both parties on the spot.
+        if (table.reservation) {
+          const ownsTable = party.is_reserved && party.target_table === table.id;
+          if (!ownsTable) {
+            const partyIdx = State.waitingParties.indexOf(party);
+            if (partyIdx !== -1) State.waitingParties.splice(partyIdx, 1);
+            const reservedParty = State.waitingParties.find(p => p.id === table.reservation.partyId);
+            if (reservedParty) State.waitingParties.splice(State.waitingParties.indexOf(reservedParty), 1);
+            table.reservation = null;
+            penalizeReputation(BalanceConfig.reservationPenalty);
+            AudioEngine.beepComplaint();
+            logFn(`Table #${table.id} was reserved! Walk-in party #${party.id} and the booked party both left.`, 'complaint');
+            return false;
+          }
+          table.reservation = null; // booked party takes its table
         }
 
         await robotMoveTo(State[robotKey], interruptKey, State.entrance.x, State.entrance.y);
@@ -1262,6 +1647,10 @@
 
         targetTable.dishServed = true;
         targetTable.servedDish = dish;
+        if (targetTable.currentOrder && dish.dish !== targetTable.currentOrder.dish) {
+          targetTable.wrongDish = true;
+          logFn(`Warning: wrong dish at Table #${targetTable.id} (ordered ${targetTable.currentOrder.dish}, delivered ${dish.dish}).`, 'warn');
+        }
         AudioEngine.beepServe();
         const noteText = dish.note ? ` [Note: "${dish.note}"]` : '';
         logFn(`Delivered ${dish.dish}${noteText} to Table #${targetTable.id}.`, 'success');
@@ -1483,6 +1872,14 @@
       this.stepping = false;
       this.currentLine = 1;
       this.activeGen = null;
+
+      // Debugger: breakpoints by editor line number + last local snapshot.
+      this.breakpoints = new Set();
+      this.watchData = {};
+      this.debug = cfg.debug || {};
+      this.gutterEl = null;
+      this.watchBodyEl = null;
+      this.watchPanelEl = null;
     }
 
     // True when this runner's generation was superseded by a newer run/stop,
@@ -1500,6 +1897,132 @@
     // script that never awaits cannot starve the browser event loop.
     tick() {
       return new Promise(r => setTimeout(r, 0));
+    }
+
+    // --- Debugger -------------------------------------------------------
+    // Breakpoint gutter and live variable panel live inside the terminal.
+    initDebugger() {
+      const editor = document.getElementById(this.editorId);
+      const gutter = document.getElementById(this.debug.gutterId);
+      const panel = document.getElementById(this.debug.watchId);
+      const body = document.getElementById(this.debug.watchBodyId);
+      const toggle = document.getElementById(this.debug.watchToggleId);
+      this.gutterEl = gutter;
+      this.watchPanelEl = panel;
+      this.watchBodyEl = body;
+      if (!editor || !gutter) return;
+
+      this.renderGutter = () => {
+        const count = editor.value.split('\n').length;
+        let html = '';
+        for (let i = 1; i <= count; i++) {
+          html += `<div class="bp-line${this.breakpoints.has(i) ? ' has-bp' : ''}" data-line="${i}">${i}</div>`;
+        }
+        gutter.innerHTML = html;
+      };
+      this.renderGutter();
+
+      editor.addEventListener('input', () => this.renderGutter());
+      editor.addEventListener('scroll', () => { gutter.scrollTop = editor.scrollTop; });
+      gutter.addEventListener('click', e => {
+        const row = e.target.closest('.bp-line');
+        if (!row) return;
+        const n = Number(row.dataset.line);
+        if (this.breakpoints.has(n)) this.breakpoints.delete(n);
+        else this.breakpoints.add(n);
+        row.classList.toggle('has-bp', this.breakpoints.has(n));
+      });
+
+      if (toggle && panel) {
+        toggle.addEventListener('click', () => {
+          const collapsed = panel.classList.toggle('collapsed');
+          toggle.textContent = collapsed ? '▸' : '◂';
+          toggle.title = collapsed ? 'Expand watch panel' : 'Collapse watch panel';
+        });
+      }
+      this.renderWatch();
+    }
+
+    expandWatch() {
+      if (!this.watchPanelEl) return;
+      this.watchPanelEl.classList.remove('collapsed');
+      const toggle = document.getElementById(this.debug.watchToggleId);
+      if (toggle) { toggle.textContent = '◂'; toggle.title = 'Collapse watch panel'; }
+    }
+
+    snapshot(values) {
+      this.watchData = values;
+      if (this.paused) this.renderWatch();
+    }
+
+    renderWatch() {
+      const body = this.watchBodyEl;
+      if (!body) return;
+      const fmt = v => {
+        if (v === null || v === undefined) return 'None';
+        if (typeof v === 'object') {
+          try { return JSON.stringify(v); } catch (e) { return String(v); }
+        }
+        return String(v);
+      };
+      const rows = Object.entries(this.watchData || {});
+      if (this.id === 'waiter' || this.id === 'waiter2') {
+        const r = this.id === 'waiter' ? State.robot : State.robot2;
+        rows.push(['battery', Math.round(r.battery) + '%']);
+        rows.push(['health', Math.round(r.health) + '%']);
+        rows.push(['tray', r.tray.map(d => d.dish)]);
+      } else if (this.id === 'chef') {
+        rows.push(['stock', State.stock]);
+        rows.push(['tickets', State.tickets.length]);
+      }
+
+      body.innerHTML = '';
+      if (rows.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'watch-empty';
+        empty.textContent = 'Run the script to inspect variables.';
+        body.appendChild(empty);
+        return;
+      }
+      for (const [name, value] of rows) {
+        const row = document.createElement('div');
+        row.className = 'watch-row';
+        const k = document.createElement('span');
+        k.className = 'watch-name';
+        k.textContent = name;
+        const v = document.createElement('span');
+        v.className = 'watch-val';
+        v.textContent = fmt(value);
+        row.appendChild(k);
+        row.appendChild(v);
+        body.appendChild(row);
+      }
+    }
+
+    // Called before every transpiled statement. Handles the line cursor,
+    // stepping, breakpoints and the pause wait loop.
+    async checkLine(num) {
+      this.setLine(num);
+      let stopped = false;
+      if (this.stepping) {
+        this.stepping = false;
+        this.pause(true);
+        stopped = true;
+      }
+      if (this.breakpoints.has(num) && !stopped) {
+        this.pause(true);
+        this.logFn(`Paused at breakpoint (line ${num}).`, 'info');
+        stopped = true;
+      }
+      if (stopped) {
+        this.expandWatch();
+        this.renderWatch();
+      }
+      if (!this.paused) return;
+      while (this.paused && this.running && !State[this.interruptKey]) {
+        await new Promise(r => setTimeout(r, 30));
+      }
+      this.renderWatch();
     }
 
     setLine(num) {
@@ -1600,6 +2123,7 @@
       }
       this.running = true;
       this.paused = false;
+      this.watchData = {};
       const gen = this.bumpGen();
       this.activeGen = gen;
       State[this.interruptKey] = false;
@@ -1714,24 +2238,29 @@
         if (converted.startsWith('while ') && converted.endsWith(':')) {
           const cond = converted.slice(6, -1).trim();
           const gen = this.activeGen;
-          converted = `while (${cond}) { await Runner.tick(); if (Runner.cancelled(${gen})) break; Runner.setLine(${lineNum}); if (Runner.stepping) { Runner.stepping = false; Runner.pause(true); } while (Runner.paused && !Runner.cancelled(${gen})) { await new Promise(r => setTimeout(r, 50)); }`;
+          converted = `while (${cond}) { await Runner.tick(); if (Runner.cancelled(${gen})) break; await Runner.checkLine(${lineNum});`;
           indentStack.push(indent + 4);
         } else if (converted.startsWith('if ') && converted.endsWith(':')) {
           const cond = converted.slice(3, -1).trim();
-          jsLines.push(' '.repeat(indent) + `Runner.setLine(${lineNum});`);
+          jsLines.push(' '.repeat(indent) + `await Runner.checkLine(${lineNum});`);
           converted = `if (${cond}) {`;
           indentStack.push(indent + 4);
         } else if (converted.startsWith('elif ') && converted.endsWith(':')) {
           const cond = converted.slice(5, -1).trim();
-          converted = `} else if (${cond}) { Runner.setLine(${lineNum});`;
+          converted = `} else if (${cond}) { await Runner.checkLine(${lineNum});`;
         } else if (converted === 'else:') {
-          converted = `} else { Runner.setLine(${lineNum});`;
+          converted = `} else { await Runner.checkLine(${lineNum});`;
         } else {
-          jsLines.push(' '.repeat(indent) + `Runner.setLine(${lineNum});`);
+          jsLines.push(' '.repeat(indent) + `await Runner.checkLine(${lineNum});`);
           converted = converted + ';';
         }
 
         jsLines.push(' '.repeat(indent) + converted);
+
+        // After each plain statement, snapshot the hoisted locals for the watch panel.
+        if (vars.size > 0 && !converted.startsWith('while ') && !converted.endsWith('{')) {
+          jsLines.push(' '.repeat(indent) + `Runner.snapshot({ ${Array.from(vars).join(', ')} });`);
+        }
       }
 
       while (indentStack.length > 1) {
@@ -1756,6 +2285,7 @@
     stepBtnId: 'script-step',
     stopBtnId: 'script-stop',
     interruptKey: 'scriptInterrupt',
+    debug: { gutterId: 'waiter-gutter', watchId: 'waiter-watch', watchBodyId: 'waiter-watch-body', watchToggleId: 'waiter-watch-toggle' },
     logFn: logMessage
   });
 
@@ -1771,6 +2301,7 @@
     stepBtnId: 'chef-step',
     stopBtnId: 'chef-stop',
     interruptKey: 'chefScriptInterrupt',
+    debug: { gutterId: 'chef-gutter', watchId: 'chef-watch', watchBodyId: 'chef-watch-body', watchToggleId: 'chef-watch-toggle' },
     logFn: logChefMessage,
     onStart: () => { State.chefMode = 'scripted'; },
     onStop: () => { State.chefMode = 'auto'; }
@@ -1788,6 +2319,7 @@
     stepBtnId: 'waiter2-step',
     stopBtnId: 'waiter2-stop',
     interruptKey: 'waiter2ScriptInterrupt',
+    debug: { gutterId: 'waiter2-gutter', watchId: 'waiter2-watch', watchBodyId: 'waiter2-watch-body', watchToggleId: 'waiter2-watch-toggle' },
     logFn: logWaiter2Message
   });
 
@@ -1850,7 +2382,23 @@
     document.getElementById('toggle-chef').onclick = () => {
       const w = document.getElementById('win-chef');
       w.style.display = w.style.display === 'none' ? 'flex' : 'none';
+      if (w.style.display === 'flex') State.tutorialFlags.chefOpened = true;
     };
+    document.getElementById('tut-resume').onclick = closeTutorial;
+    document.getElementById('tut-close').onclick = closeTutorial;
+    document.getElementById('tut-copy').onclick = () => {
+      const text = document.getElementById('tut-snippet').textContent;
+      if (navigator.clipboard) navigator.clipboard.writeText(text);
+    };
+    const reviewList = document.getElementById('tutorial-review-list');
+    if (reviewList) {
+      reviewList.onclick = e => {
+        const btn = e.target.closest('[data-tut]');
+        if (!btn) return;
+        const t = TUTORIALS.find(x => x.id === btn.dataset.tut);
+        if (t) showTutorial(t);
+      };
+    }
     document.getElementById('toggle-achievements').onclick = () => {
       const w = document.getElementById('win-achievements');
       w.style.display = w.style.display === 'none' ? 'flex' : 'none';
@@ -1863,7 +2411,7 @@
 
     // Handbook pages (PRD Section 10)
     let handbookPage = 1;
-    const HANDBOOK_PAGES = 4;
+    const HANDBOOK_PAGES = 5;
     const showHandbookPage = (n) => {
       handbookPage = Math.min(HANDBOOK_PAGES, Math.max(1, n));
       document.querySelectorAll('#win-handbook .hb-page').forEach(el => {
@@ -1876,6 +2424,7 @@
       const w = document.getElementById('win-handbook');
       w.style.display = w.style.display === 'none' ? 'flex' : 'none';
       showHandbookPage(handbookPage);
+      renderTutorialReview();
     };
     document.getElementById('hb-prev').onclick = () => showHandbookPage(handbookPage - 1);
     document.getElementById('hb-next').onclick = () => showHandbookPage(handbookPage + 1);
@@ -2138,6 +2687,7 @@
       document.getElementById(s.id).onclick = () => {
         speeds.forEach(other => document.getElementById(other.id).classList.remove('active'));
         document.getElementById(s.id).classList.add('active');
+        if (State.tutorialOpen) State.tutorialSpeedOverride = true;
         if (s.val === 0) {
           State.isPaused = true;
         } else {
@@ -2149,13 +2699,38 @@
 
     // Main menu & settings
     document.getElementById('btn-start').onclick = () => {
+      State.account = 'player';
+      State.started = true;
       document.getElementById('main-menu').classList.add('hidden');
       AudioEngine.init();
+      State.nextPartyTimer = Math.max(State.nextPartyTimer, 45); // breathing room for the first script
+      const welcome = TUTORIALS.find(t => t.id === 'tut_welcome');
+      if (welcome && !State.tutorialCompleted.includes(welcome.id)) showTutorial(welcome);
     };
 
     document.getElementById('btn-load').onclick = () => {
+      State.account = 'player';
+      State.started = true;
       loadSaveGame();
       document.getElementById('main-menu').classList.add('hidden');
+      AudioEngine.init();
+      const welcome = TUTORIALS.find(t => t.id === 'tut_welcome');
+      if (welcome && !State.tutorialCompleted.includes(welcome.id)) showTutorial(welcome);
+    };
+
+    // Hidden developer account: full default scripts for immediate testing
+    document.getElementById('btn-dev-login').onclick = () => {
+      State.account = 'developer';
+      State.started = true;
+      Object.keys(DEV_DEFAULT_SCRIPTS).forEach(id => {
+        const ed = document.getElementById(id);
+        if (ed) ed.value = DEV_DEFAULT_SCRIPTS[id];
+      });
+      loadSaveGame();
+      [waiterRunner, chefRunner, waiter2Runner].forEach(r => { if (r.renderGutter) r.renderGutter(); });
+      document.getElementById('hud-dev-badge').style.display = 'inline-block';
+      document.getElementById('main-menu').classList.add('hidden');
+      AudioEngine.init();
     };
 
     document.getElementById('btn-settings').onclick = () => {
@@ -2181,7 +2756,7 @@
 
     document.getElementById('btn-reset-save').onclick = () => {
       if (confirm('Reset saved game?')) {
-        localStorage.removeItem('traynerror_savedata');
+        localStorage.removeItem(SAVE_KEY(State.account));
         location.reload();
       }
     };
@@ -2214,6 +2789,85 @@
       const owned = btn.dataset.owned === '1';
       btn.disabled = owned || cash < Number(btn.dataset.cost);
     });
+  }
+
+  // --- Tutorial modal (player account) ---
+  function syncSpeedButtons() {
+    const activeId = State.isPaused ? 'speed-pause'
+      : State.speed >= 4 ? 'speed-4x'
+      : State.speed >= 2 ? 'speed-2x'
+      : 'speed-1x';
+    ['speed-pause', 'speed-1x', 'speed-2x', 'speed-4x'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('active', id === activeId);
+    });
+  }
+
+  function showTutorial(t) {
+    if (State.tutorialOpen) return;
+    State.tutorialIsReview = State.tutorialCompleted.includes(t.id);
+    State.tutorialOpen = true;
+    State.tutorialWasPaused = State.isPaused;
+    State.tutorialSpeedOverride = false;
+    State.isPaused = true; // freeze the world so the player can read
+    if (!State.tutorialIsReview) State.tutorialCompleted.push(t.id);
+
+    document.getElementById('tut-badge').textContent = t.badge;
+    document.getElementById('tut-title').textContent = t.title;
+    document.getElementById('tut-body').innerHTML = t.body;
+    document.getElementById('tut-api').innerHTML = (t.api || []).map(a => `<li>${a}</li>`).join('');
+    const snippetEl = document.getElementById('tut-snippet');
+    if (snippetEl) snippetEl.textContent = t.snippet || '';
+    document.getElementById('tut-snippet-wrap').style.display = t.snippet ? 'block' : 'none';
+    document.getElementById('tut-disable').checked = false;
+    const panel = document.getElementById('modal-tutorial');
+    panel.classList.remove('hidden');
+    panel.style.display = 'flex';
+    syncSpeedButtons();
+    renderTutorialReview();
+    if (State.started) saveGame();
+  }
+
+  function closeTutorial() {
+    const disable = document.getElementById('tut-disable');
+    if (disable && disable.checked) State.tutorialsDisabled = true;
+    const panel = document.getElementById('modal-tutorial');
+    panel.classList.add('hidden');
+    panel.style.display = 'none';
+    State.tutorialOpen = false;
+    State.isPaused = State.tutorialSpeedOverride ? State.isPaused : State.tutorialWasPaused;
+    State.tutorialSpeedOverride = false;
+    if (!State.tutorialIsReview) {
+      State.tutorialCooldown = 6; // let the player read the result before the next card
+      State.nextPartyTimer = Math.max(State.nextPartyTimer, 25); // quiet time to write code
+    }
+    syncSpeedButtons();
+    if (State.started) saveGame();
+  }
+
+  function renderTutorialReview() {
+    const list = document.getElementById('tutorial-review-list');
+    if (!list) return;
+    const seen = TUTORIALS.filter(t => State.tutorialCompleted.includes(t.id));
+    list.innerHTML = seen.length
+      ? seen.map(t => `<button class="tut-review-btn" data-tut="${t.id}">${t.title}</button>`).join('')
+      : '<p class="hb-intro">No tutorial cards seen yet.</p>';
+  }
+
+  function checkTutorialTriggers() {
+    if (!State.started || State.account !== 'player' || State.tutorialsDisabled || State.tutorialOpen) return;
+    if (State.tutorialCooldown > 0) return;
+    // Never interrupt someone mid-line in an editor.
+    const focused = document.activeElement;
+    if (focused && focused.tagName === 'TEXTAREA') return;
+    const next = Mechanics.nextTutorial(TUTORIALS, State.tutorialCompleted, State);
+    if (next) showTutorial(next);
+  }
+
+  // Early shifts run at a gentler customer rate until the player has served a full loop.
+  function tutorialPacingFactor() {
+    if (State.account !== 'player' || State.tutorialsDisabled) return 1;
+    return State.tutorialCompleted.includes('tut_first_pay') ? 1 : 2;
   }
 
   function updateHUD() {
@@ -2268,6 +2922,8 @@
       codeLineLimit: State.codeLineLimit,
       totalServed: State.totalServed,
       totalNightServed: State.totalNightServed,
+      tutorialCompleted: State.tutorialCompleted,
+      tutorialsDisabled: State.tutorialsDisabled,
       robotHealth: State.robot.health,
       robot2Health: State.robot2.health,
       achievements: State.achievements,
@@ -2275,11 +2931,17 @@
       chefCode: document.getElementById('chef-code-editor') ? document.getElementById('chef-code-editor').value : '',
       waiter2Code: document.getElementById('waiter2-code-editor') ? document.getElementById('waiter2-code-editor').value : ''
     };
-    localStorage.setItem('traynerror_savedata', JSON.stringify(data));
+    localStorage.setItem(SAVE_KEY(State.account), JSON.stringify(data));
   }
 
   function loadSaveGame() {
-    const saved = localStorage.getItem('traynerror_savedata');
+    const key = SAVE_KEY(State.account);
+    let saved = localStorage.getItem(key);
+    // Migrate the old single-account save into the player account once
+    if (!saved && State.account === 'player') {
+      saved = localStorage.getItem('traynerror_savedata');
+      if (saved) localStorage.setItem(key, saved);
+    }
     if (!saved) return;
     try {
       const data = JSON.parse(saved);
@@ -2296,6 +2958,8 @@
       State.codeLineLimit = data.codeLineLimit || 25;
       State.totalServed = data.totalServed || 0;
       State.totalNightServed = data.totalNightServed || 0;
+      State.tutorialCompleted = Array.isArray(data.tutorialCompleted) ? data.tutorialCompleted : [];
+      State.tutorialsDisabled = !!data.tutorialsDisabled;
       State.robot.health = data.robotHealth !== undefined ? data.robotHealth : 100;
       State.robot2.health = data.robot2Health !== undefined ? data.robot2Health : 100;
       if (data.achievements && Array.isArray(data.achievements)) {
@@ -2308,15 +2972,16 @@
       State.robot.trayCapacity = State.trayUpgrade ? 2 : 1;
       State.robot2.trayCapacity = State.trayUpgrade ? 2 : 1;
 
-      if (data.code && document.getElementById('code-editor')) {
+      if (data.code !== undefined && data.code !== null && document.getElementById('code-editor')) {
         document.getElementById('code-editor').value = data.code;
       }
-      if (data.chefCode && document.getElementById('chef-code-editor')) {
+      if (data.chefCode !== undefined && data.chefCode !== null && document.getElementById('chef-code-editor')) {
         document.getElementById('chef-code-editor').value = data.chefCode;
       }
-      if (data.waiter2Code && document.getElementById('waiter2-code-editor')) {
+      if (data.waiter2Code !== undefined && data.waiter2Code !== null && document.getElementById('waiter2-code-editor')) {
         document.getElementById('waiter2-code-editor').value = data.waiter2Code;
       }
+      [waiterRunner, chefRunner, waiter2Runner].forEach(r => { if (r.renderGutter) r.renderGutter(); });
 
       document.getElementById('stock-count').textContent = State.stock;
       if (State.speedUpgrade) {
@@ -2372,12 +3037,14 @@
       State.day++;
       logMessage(`Day ${State.day} begins! Rent & upkeep charged ($${BalanceConfig.rentDaily}).`, 'info');
       State.cash = Math.max(0, State.cash - BalanceConfig.rentDaily);
-      saveGame(); // Autosave daily
+      if (State.started) saveGame(); // Autosave daily
     }
 
     updateCustomers(simDt);
     updateKitchen(simDt);
     updateRobot(simDt);
+    if (State.tutorialCooldown > 0) State.tutorialCooldown -= simDt;
+    checkTutorialTriggers();
   }
 
   function mainLoop(now) {
@@ -2396,7 +3063,7 @@
     autosaveTimer += dt;
     if (autosaveTimer >= 60) {
       autosaveTimer = 0;
-      saveGame();
+      if (State.started) saveGame();
     }
 
     updateHUD();
@@ -2404,10 +3071,15 @@
   }
 
   // --- Bootstrap ---
+  if (typeof window !== 'undefined' && window.__TRAY_TEST__) {
+    window.__TrayTest = { runners: { waiter: waiterRunner, chef: chefRunner, waiter2: waiter2Runner }, State, BalanceConfig };
+  }
+
   window.addEventListener('DOMContentLoaded', () => {
     resizeCanvas();
     initCameraControls();
     initWindows();
+    [waiterRunner, chefRunner, waiter2Runner].forEach(r => r.initDebugger());
     updateScriptButtons();
     renderAchievements();
     loadAssets(() => {

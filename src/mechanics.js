@@ -1,7 +1,7 @@
 // Pure gameplay helpers. Browser: window.Mechanics. Node: module.exports (for tests).
 (function (root) {
   const TABLE_FILTERS = {
-    free: t => !t.occupiedBy,
+    free: t => !t.occupiedBy && !t.reservation,
     order: t => t.occupiedBy && t.orderReady && !t.orderTaken,
     served: t => !!t.dishServed
   };
@@ -49,7 +49,13 @@
     return !!interruptFlag || (currentGen || 0) !== (startGen || 0);
   }
 
-  const api = { nearestTable, countCodeLines, specialRequestMissed, noteComplaint, loopCancelled };
+  // First tutorial milestone not yet completed whose trigger fires for this state.
+  function nextTutorial(tutorials, completed, state) {
+    const done = new Set(completed || []);
+    return (tutorials || []).find(t => !done.has(t.id) && t.trigger(state)) || null;
+  }
+
+  const api = { nearestTable, countCodeLines, specialRequestMissed, noteComplaint, loopCancelled, nextTutorial };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Mechanics = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

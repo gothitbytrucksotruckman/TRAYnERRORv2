@@ -18,6 +18,7 @@
           <button id="btn-settings" class="img-btn"><img src="assets/gui/settings-button.png" alt="Settings"></button>
         </div>
       </div>
+      <button id="btn-dev-login" class="dev-stealth-btn" title="Developer Mode">·</button>
     </div>
 
     <!-- HUD -->
@@ -25,6 +26,7 @@
       <div class="hud-item reputation"><span class="label">REP:</span> <span id="hud-stars">★★★★★</span></div>
       <div class="hud-item cash"><span class="label">CASH:</span> $<span id="hud-cash">50</span></div>
       <div class="hud-item day"><span class="label">DAY:</span> <span id="hud-day">1</span></div>
+      <div id="hud-dev-badge" class="hud-item" style="display:none; color:#ffb347;">DEV</div>
       <div class="hud-item clock"><span class="label">TIME:</span> <span id="hud-time">08:00</span></div>
       <div id="hud-rush" class="hud-item rush hidden"><span id="rush-badge" class="rush-badge">🔥 RUSH</span></div>
       <div class="hud-item battery"><span class="label">BAT:</span> <span id="hud-battery">100%</span></div>
@@ -81,37 +83,15 @@
 
         <div id="tab-code" class="tab-content active">
           <div class="code-wrap">
-            <div id="waiter-line-highlight" class="line-highlight"></div>
-            <textarea id="code-editor" spellcheck="false"># Robot Waiter Control
-# PRD Loop: seat -> take_order -> send_to_kitchen -> deliver
-while True:
-    if battery() < 20:
-        go_charge()
-
-    # Wear builds up while walking; service at the charger
-    if health() < 20:
-        repair()
-
-    dishes = ready_dishes()
-    if len(dishes) > 0:
-        dish = dishes[0]
-        if claim(dish):
-            deliver(dish, dish["table"])
-            continue
-
-    order = take_order()
-    if order:
-        send_to_kitchen(order)
-        continue
-
-    parties = waiting_parties()
-    free = free_tables()
-    if len(parties) > 0 and len(free) > 0:
-        seat(parties[0], free[0])
-        continue
-
-    wait(1)
-</textarea>
+            <div id="waiter-gutter" class="bp-gutter" title="Click a line number to toggle a breakpoint"></div>
+            <div class="code-col">
+              <div id="waiter-line-highlight" class="line-highlight"></div>
+              <textarea id="code-editor" spellcheck="false"></textarea>
+            </div>
+            <aside id="waiter-watch" class="watch-panel">
+              <div class="watch-head"><span>WATCH</span><button id="waiter-watch-toggle" class="watch-toggle" title="Collapse watch panel">◂</button></div>
+              <div id="waiter-watch-body" class="watch-body"></div>
+            </aside>
           </div>
         </div>
 
@@ -182,33 +162,15 @@ while True:
 
         <div id="tab-chef-code" class="tab-content active">
           <div class="code-wrap">
-            <div id="chef-line-highlight" class="line-highlight"></div>
-            <textarea id="chef-code-editor" spellcheck="false"># Chef Robot Control Script
-# Cooperates with Waiter via tickets & counter
-
-while True:
-    pending = tickets()
-    if len(pending) > 0:
-        ticket = pending[0]
-
-        # Check and grab ingredients (PRD Section 8)
-        if not grab("ingredients", 1):
-            print("Out of stock! Pausing for restock.")
-            wait(2)
-            continue
-
-        # Apply any special request (e.g. "no onions")
-        handle_note(ticket)
-
-        # Cooking time based on ticket
-        cook(4)
-
-        # Place finished dish on counter for waiter
-        plate(ticket)
-        continue
-
-    wait(1)
-</textarea>
+            <div id="chef-gutter" class="bp-gutter" title="Click a line number to toggle a breakpoint"></div>
+            <div class="code-col">
+              <div id="chef-line-highlight" class="line-highlight"></div>
+              <textarea id="chef-code-editor" spellcheck="false"></textarea>
+            </div>
+            <aside id="chef-watch" class="watch-panel">
+              <div class="watch-head"><span>WATCH</span><button id="chef-watch-toggle" class="watch-toggle" title="Collapse watch panel">◂</button></div>
+              <div id="chef-watch-body" class="watch-body"></div>
+            </aside>
           </div>
         </div>
 
@@ -269,42 +231,15 @@ while True:
 
         <div id="tab-waiter2-code" class="tab-content active">
           <div class="code-wrap">
-            <div id="waiter2-line-highlight" class="line-highlight"></div>
-            <textarea id="waiter2-code-editor" spellcheck="false"># Hired Waiter #2 Control
-# Cooperates with Waiter #1 via claim(dish)
-
-while True:
-    if battery() < 20:
-        go_charge()
-
-    # Wear builds up while walking; service at the charger
-    if health() < 20:
-        repair()
-
-    # Claim & deliver ready dishes
-    dishes = ready_dishes()
-    if len(dishes) > 0:
-        dish = dishes[0]
-        # Atomic claim: returns True only for first robot!
-        if claim(dish):
-            deliver(dish, dish["table"])
-            continue
-
-    # Help take orders from ready tables
-    order = take_order()
-    if order:
-        send_to_kitchen(order)
-        continue
-
-    # Seat remaining guests
-    parties = waiting_parties()
-    free = free_tables()
-    if len(parties) > 0 and len(free) > 0:
-        seat(parties[0], free[0])
-        continue
-
-    wait(1)
-</textarea>
+            <div id="waiter2-gutter" class="bp-gutter" title="Click a line number to toggle a breakpoint"></div>
+            <div class="code-col">
+              <div id="waiter2-line-highlight" class="line-highlight"></div>
+              <textarea id="waiter2-code-editor" spellcheck="false"></textarea>
+            </div>
+            <aside id="waiter2-watch" class="watch-panel">
+              <div class="watch-head"><span>WATCH</span><button id="waiter2-watch-toggle" class="watch-toggle" title="Collapse watch panel">◂</button></div>
+              <div id="waiter2-watch-body" class="watch-body"></div>
+            </aside>
           </div>
         </div>
 
@@ -429,6 +364,10 @@ while True:
             <strong>Errors &amp; Storage</strong>
             <p>Errors appear in the terminal with a line number. Each terminal has a line budget; blanks and <code># comments</code> are free. Buy RAM Expansion in the Shop for +15 lines.</p>
           </div>
+          <div class="hb-card">
+            <strong>Breakpoints &amp; Watch</strong>
+            <p>Click a line number in the gutter to drop a red breakpoint. The script pauses there. The Watch panel shows local variables plus battery, health and tray. Collapse it with ◂; Step runs one line at a time.</p>
+          </div>
         </div>
 
         <div class="hb-page" data-page="2">
@@ -441,6 +380,10 @@ while True:
           <div class="hb-card">
             <strong>Orders &amp; Delivery</strong>
             <p><code>take_order(table)</code> after 3s. Send it with <code>send_to_kitchen(order)</code>. Take plated dishes from <code>ready_dishes()</code>, lock one with <code>claim(dish)</code>, then <code>deliver(dish, table)</code>.</p>
+          </div>
+          <div class="hb-card">
+            <strong>Reservations</strong>
+            <p>A table with a tent-card badge is booked. <code>free_tables()</code> skips it and <code>is_reserved(table)</code> returns <code>True</code>. Seat the booked party first: a walk-in at that table loses both parties and 0.6 reputation.</p>
           </div>
           <div class="hb-card">
             <strong>Upkeep</strong>
@@ -474,6 +417,31 @@ while True:
           </div>
         </div>
 
+        <div class="hb-page" data-page="5">
+          <h4>5. Tutorial Reference</h4>
+          <div class="hb-card">
+            <strong>Seating &amp; Orders</strong>
+            <p><code>waiting_parties()</code>, <code>free_tables()</code>, <code>seat()</code>, <code>take_order()</code>, <code>send_to_kitchen()</code>. Match party size to seats and keep the queue moving.</p>
+          </div>
+          <div class="hb-card">
+            <strong>Serving</strong>
+            <p><code>ready_dishes()</code>, <code>claim()</code>, <code>deliver()</code>. Claim before carrying; deliver to the table on the dish.</p>
+          </div>
+          <div class="hb-card">
+            <strong>Upkeep</strong>
+            <p><code>battery()</code> / <code>go_charge()</code> and <code>health()</code> / <code>repair()</code>. Charge at (1, 0); repairs cost $15 by day, $5 at night.</p>
+          </div>
+          <div class="hb-card">
+            <strong>Time, Money &amp; Fleet</strong>
+            <p><code>is_night()</code> switches the menu. Rent is charged daily. The Shop sells upgrades and firmware. Waiter #2 shares the counter, so always <code>claim()</code> first.</p>
+          </div>
+          <div class="hb-card">
+            <strong>Replay a Tutorial</strong>
+            <p>Every card you have seen can be opened again from this list.</p>
+            <div id="tutorial-review-list" class="tut-review-list"></div>
+          </div>
+        </div>
+
         <div class="hb-nav">
           <button id="hb-prev" class="shop-btn">◀ Prev</button>
           <span id="hb-page-label">Page 1 / 4</span>
@@ -495,6 +463,38 @@ while True:
           <button id="btn-reset-save" class="hud-btn danger">Reset Save</button>
         </div>
         <button id="btn-close-settings" class="hud-btn">Close</button>
+      </div>
+    </div>
+
+    <!-- Tutorial Window (player account) -->
+    <div id="modal-tutorial" class="win-panel tutorial-panel" style="top: 110px; left: 420px; display: none;">
+      <div class="win-titlebar">
+        <span class="win-title">📘 Tutorial</span>
+        <div class="win-btns">
+          <button class="win-btn win-min" title="Minimize">_</button>
+          <button id="tut-close" class="win-btn win-close" title="Close">×</button>
+        </div>
+      </div>
+      <div class="win-body tutorial-box">
+        <div class="tutorial-head">
+          <span id="tut-badge" class="tutorial-badge">BASICS</span>
+          <span class="tutorial-paused">⏸ Simulation paused</span>
+        </div>
+        <h2 id="tut-title">Tutorial</h2>
+        <div id="tut-body" class="tutorial-body"></div>
+        <ul id="tut-api" class="tutorial-api"></ul>
+        <div id="tut-snippet-wrap" class="tutorial-snippet-wrap">
+          <div class="tutorial-snippet-head">
+            <span>Example</span>
+            <button id="tut-copy" class="hud-btn">Copy</button>
+          </div>
+          <pre><code id="tut-snippet"></code></pre>
+        </div>
+        <label class="check-label tutorial-disable">
+          <input type="checkbox" id="tut-disable">
+          Don't show tutorials again
+        </label>
+        <button id="tut-resume" class="hud-btn tutorial-resume">Got It — Resume Game</button>
       </div>
     </div>
   </div>

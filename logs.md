@@ -1,6 +1,6 @@
 # Tray & Error — Development Log
 
-Last updated: Oct 20, 2026
+Last updated: Oct 24, 2026
 
 This document tracks all implemented features, active work, and planned mechanics. It is the living companion to `TRAYnERROR PRD.md` and serves as the source of truth for what exists in the codebase today.
 
@@ -108,8 +108,9 @@ This document tracks all implemented features, active work, and planned mechanic
 - **Autosave** every 60 seconds real time + on day rollover.
 - **Manual save** from Settings modal.
 - **Data persisted:** cash, reputation, day, time, stock, all upgrades, hired waiter flag, totalServed, totalNightServed, achievement unlock states, all terminal code.
+- **Account-scoped keys:** player and developer saves are stored separately (`traynerror_savedata_player`, `traynerror_savedata_dev`); the legacy single-key save migrates into the player account.
 - **Load** restores UI state (disabled shop buttons, waiter #2 HUD visibility).
-- **Reset save** with confirmation dialog.
+- **Reset save** with confirmation dialog; resets only the active account's save.
 
 ### 1.13 Audio
 - **Web Audio API synth** (no external audio files needed).
@@ -117,7 +118,8 @@ This document tracks all implemented features, active work, and planned mechanic
 - **Volume slider** in Settings modal.
 
 ### 1.14 UI & Windows
-- **Main menu** with Start Game, Load Game, Settings buttons.
+- **Main menu** with Start Game, Load Game, Settings buttons, plus a hidden bottom-right developer-account button.
+- **Two accounts:** Player (default, empty editors) and Developer (default scripts pre-filled, separate save).
 - **HUD bar:** reputation stars, cash, day counter, game time, battery %, rush hour badge.
 - **Draggable window panels** for Waiter, Waiter #2, Chef, Shop, Achievements, Settings.
 - **Tab system** per terminal: Code, Log, API/Recipes.
@@ -150,7 +152,7 @@ This document tracks all implemented features, active work, and planned mechanic
 - **Repair cost:** $15 during day, $5 at night (`BalanceConfig.repairCostDay/Night`). Full-health calls are free no-ops; insufficient cash fails cleanly.
 - **HUD:** `DUR` gauge turns red at 20% or below.
 - **Persistence:** both robots' health saved and restored.
-- **Default scripts:** both waiter scripts check `health() < 20` and call `repair()`, staying within the 25-line budget.
+- **Default scripts (developer account only):** all three editor scripts check `health() < 20` and call `repair()`, staying within the 25-line budget. Player editors ship empty.
 - **Transpiler:** `repair` is in the async-call list, so the script actually waits for the charger trip and repair timer.
 
 ### 1.19 Script Runner Freeze & Zombie Loop Fix (Oct 20)
@@ -159,6 +161,42 @@ This document tracks all implemented features, active work, and planned mechanic
 - **Async helpers honour cancellation:** `robotMoveTo()`, `scriptWait()`, `sleepTick()`, `go_charge()`, `repair()`, `seat()`, `take_order()` and `deliver()` capture the run generation and bail on mismatch, so a cancelled robot stops mid-walk.
 - **Chef interrupt key fixed:** `cook()` and `wait()` now use `chefScriptInterrupt`, so the Chef Stop/Pause controls actually take effect; `chefScriptPaused` added.
 - **Race guards:** `take_order()` re-checks occupancy after the 0.7s delay (previously a customer walking out crashed the script), `seat()` re-checks the table and returns the party to the queue if cancelled, `deliver()` releases a claimed dish back to the counter on cancellation and discards it if the table emptied.
+
+### 1.20 In-Terminal Debugger (Oct 24)
+- **Breakpoints:** click a line number in the gutter to toggle a red breakpoint dot; the transpiled runner pauses right before that line.
+- **Transpiler hook:** every statement now awaits `Runner.checkLine(line)`, which updates the highlight, handles stepping and breakpoints, and waits while paused. Loop headers keep `Runner.tick()` and the generation guard.
+- **Live watch panel:** collapsible panel on the right of each code tab shows local variables (captured via transpiled `Runner.snapshot({...})`) plus robot `battery`, `health`, `tray` (chef shows `stock` and `tickets`).
+- **Auto-expand / collapse:** the panel opens itself on a breakpoint or Step and collapses to a narrow strip via the ◂ / ▸ button.
+- **Step:** Step resumes exactly one transpiled line, refreshes the watch panel, and pauses again.
+
+### 1.21 Table Reservations (Oct 24)
+- **Bookings:** one table at a time is reserved every ~90s for a party matching its seat count, arriving after a ~25s countdown with a tent-card badge on the canvas. Walk-in arrivals slow by 35% per active hold so the floor never shrinks to a couple of free tables.
+- **API:** `free_tables()` skips reserved tables; `is_reserved(table)` reports a hold; `waiting_parties()` exposes `is_reserved` and `table` for booked guests.
+- **Seating rules:** only the booked party may take its table. Seating a walk-in on a reserved table despawns both parties, clears the booking, logs a plain-language complaint and costs 0.6 reputation.
+- **Timeouts:** a reserved party that waits 45s clears its hold and leaves.
+
+### 1.22 Refund System (Oct 24)
+- **Triggers:** ignored special request, wrong dish delivered, or a party walking out while waiting for food.
+- **Effect:** the menu price is deducted from cash (can go negative with a warning), no payment is collected, and the refund is logged as a complaint.
+- **Wrong-dish tracking:** `deliver()` flags a mismatch between the ticket dish and the table's order.
+
+### 1.23 Player & Developer Accounts (Oct 24)
+- **Player account is the default.** Opening the game boots into the player account; all three code editors start empty so the player writes their own programs from zero.
+- **Hidden developer entry.** A near-invisible dot button (`#btn-dev-login`) sits in the bottom-right corner of the title screen. Clicking it enters the developer account with `DEV_DEFAULT_SCRIPTS` pre-filled in all three editors (waiter, chef, waiter #2), ready to Run immediately.
+- **Dev defaults stay inside the code budget:** 21 waiter lines, 13 chef lines, 21 waiter #2 lines (comments/blanks free, 25-line limit). Verified by `tests/accounts.test.js`.
+- **Separate saves per account:** `traynerror_savedata_player` and `traynerror_savedata_dev`, resolved by `SAVE_KEY(State.account)`. Test edits never overwrite player progress. The legacy `traynerror_savedata` key migrates once into the player account.
+- **Dev visibility:** `DEV` badge in the HUD while in the developer account.
+- **Autosave gating:** autosave (60s and day rollover) only runs after the game is started (`State.started`), so sitting on the title screen no longer overwrites a save with default state.
+
+### 1.24 Dynamic Tutorial (Oct 24)
+- **Player-account only.** Developer account never sees tutorial cards, so test scripts run uninterrupted.
+- **11 milestones:** welcome, first customer, first ready order, first plated dish, low battery (≤40%), low wear (≤60%), first payment, night shift, chef terminal opened, table reservation, Waiter #2 hired.
+- **World pause:** opening a card sets `State.isPaused`, restoring the previous pause state on close; HUD speed buttons re-sync. A 6s cooldown separates cards.
+- **Card window:** a draggable, minimizable panel like the terminals, so the player can keep reading while editing code. Closing it resumes the world (or keeps the player's own pause choice); seen cards can be reopened from Handbook → Tutorial Reference.
+- **Pacing:** first party is delayed 45s, spawns run at half rate until the first payment, each card buys 25 quiet seconds, and a card never interrupts someone typing in an editor. Welcome card explains ⏸ / 1x / 2x / 4x and that pausing is safe.
+- **Card content:** situation explanation, API list, copyable Python snippet. "Don't show tutorials again" opt-out.
+- **Trigger + persistence:** `Mechanics.nextTutorial()` picks the first uncompleted milestone whose trigger holds; `tutorialCompleted` / `tutorialsDisabled` persist in player save data. Handbook gained a 5th Tutorial Reference page.
+- **Verified by** `tests/mechanics.test.js` (milestone ordering and once-only behaviour).
 
 ---
 
@@ -184,11 +222,11 @@ Features listed below are sourced from the PRD and design discussions. Priority 
 
 | Feature | PRD Section | Notes |
 | --- | --- | --- |
-| Table Reservations | §7 | Booked parties arrive at set times. Waiter code must hold tables with `is_reserved(table)`. |
-| Step-Through Debugging Enhancement | §5, §10 | Current step button exists but could be improved with breakpoints and variable watch. |
+| ~~Table Reservations~~ | §7 | ✅ Booked parties arrive after a countdown; `is_reserved(table)`, `free_tables()` skips holds, walk-in theft loses both parties. |
+| ~~Step-Through Debugging Enhancement~~ | §5, §10 | ✅ Gutter breakpoints plus collapsible live variable watch panel. |
 | More Customer Archetypes | §7 | Family (group with child, may order toys), Shift Worker, Mystery Regular. |
 | Obstacle Avoidance (spills) | §6 | Dynamic floor obstacles that block pathfinding temporarily. |
-| Refund System | §7 | Wrong orders trigger partial refunds; complaint severity determines refund amount. |
+| ~~Refund System~~ | §7 | ✅ Menu price refunded on ignored notes, wrong dishes or walkouts. |
 
 ### 3.3 Low Priority (Later / Final Version)
 
@@ -225,6 +263,7 @@ Features listed below are sourced from the PRD and design discussions. Priority 
 | `src/game.js` | Core simulation loop, renderer, pathfinder, customer state machine, Chef/Waiter APIs, transpiler, script runner |
 | `src/mechanics.js` | Pure helpers: nearest-table selection, code-line counting, special-request checks and complaint text |
 | `tests/mechanics.test.js` | Assert-based checks for `src/mechanics.js` (`node tests/mechanics.test.js`) |
+| `tests/accounts.test.js` | Assert-based checks for account defaults, editor emptiness and dev entry (`node tests/accounts.test.js`) |
 | `TRAYnERROR PRD.md` | Full game design document and requirements specification |
 | `logs.md` | This file — development progress tracker |
 | `assets/restaurant/` | Wall, floor, and furniture pixel art sprites |
